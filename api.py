@@ -21,6 +21,13 @@ SECRET_KEY  = os.getenv("KATRIX_SECRET_KEY", "cambia-esta-clave-en-produccion-20
 ALGORITHM   = "HS256"
 TOKEN_EXPIRE_HOURS = int(os.getenv("TOKEN_EXPIRE_HOURS", "24"))
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.inicializar_db()
+    yield
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Katrix ERP API",
@@ -28,6 +35,7 @@ app = FastAPI(
     version="1.0.0",
     contact={"name": "Katrix ERP", "email": "admin@katrix.com"},
     license_info={"name": "Privado"},
+    lifespan=lifespan,
 )
 
 # CORS — ajustá los orígenes a tu dominio real en producción
