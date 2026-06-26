@@ -91,40 +91,31 @@ def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
 
 @app.post("/auth/login", response_model=Token, tags=["Auth"])
 def login(body: LoginRequest):
-    """
-    Login con usuario/email y contraseña. Retorna JWT Bearer token.
-    """
-    # Buscar usuario por nombre de usuario o email
-    users = db.obtener_usuarios()
-    user = None
-    for u in users:
-        if u.get("usuario") == body.username or u.get("email") == body.username:
-            user = u
-            break
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    success, requiere_cambio, error_msg, rol, user_id = db.verificar_login_status(
+        body.username, body.password
+    )
+    if not success:
+        raise HTTPException(status_code=401, detail=error_msg or "Usuario o contraseña incorrectos")
 
-    if not db.verify_password(user["password"], body.password):
-        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
-
-    if user.get("bloqueado_hasta") and int(user.get("bloqueado_hasta", 0)) > datetime.utcnow().timestamp():
-        raise HTTPException(status_code=403, detail="Cuenta bloqueada temporalmente")
-
+    # Obtener datos del usuario para el token
+    usuarios = db.obtener_usuarios()
+    user = next((u for u in usuarios if u.get("email") == body.username or u.get("usuario") == body.username), None)
+    
     token = create_token({
-        "user_id":  user["id"],
-        "username": user["usuario"] or user["email"],
-        "role":     user.get("rol", "agente"),
-        "matricula": user.get("matricula"),
+        "user_id":  user_id,
+        "username": user.get("usuario") or user.get("email"),
+        "role":     rol,
+        "matricula": user.get("matricula_asociada"),
     })
 
-    db.registrar_log(user["usuario"] or user["email"], "API_LOGIN", "Login desde API REST")
+    db.registrar_log(body.username, "API_LOGIN", "Login desde API REST")
 
     return Token(
         access_token=token,
         token_type="bearer",
-        role=user.get("rol", "agente"),
-        user_id=user["id"],
-        username=user["usuario"] or user["email"],
+        role=rol,
+        user_id=user_id,
+        username=user.get("usuario") or user.get("email"),
     )
 
 
