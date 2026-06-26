@@ -1,0 +1,11 @@
+flet>=0.24.0
+beautifulsoup4>=4.13.0
+requests>=2.32.0
+lxml>=5.4.0
+soupsieve>=2.7
+
+# API REST
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-jose[cryptography]>=3.3.0
+passlib>=1.7.4

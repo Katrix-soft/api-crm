@@ -1,0 +1,20 @@
+# SQLite databases
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python cache & bytecode
+__pycache__/
+*.pyc
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
