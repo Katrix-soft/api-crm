@@ -7,10 +7,14 @@ import os, sys
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Depends, status, Query
+from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from jose import JWTError, jwt
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ssn_test as db
@@ -41,7 +45,7 @@ app = FastAPI(
 # CORS — ajustá los orígenes a tu dominio real en producción
 ALLOWED_ORIGINS = os.getenv(
     "KATRIX_CORS_ORIGINS",
-    "http://localhost,http://localhost:3000,http://localhost:8080,*"
+    "http://localhost,http://localhost:3000,http://localhost:8080"
 ).split(",")
 
 app.add_middleware(
@@ -51,6 +55,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -90,7 +108,8 @@ def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
 # ─── AUTH ────────────────────────────────────────────────────────────────────
 
 @app.post("/auth/login", response_model=Token, tags=["Auth"])
-def login(body: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, body: LoginRequest):
     success, requiere_cambio, error_msg, rol, user_id = db.verificar_login_status(
         body.username, body.password
     )
@@ -778,7 +797,8 @@ def list_logs(
 # ─── LICENCIAS DE SOFTWARE ───────────────────────────────────────────────────
 
 @app.post("/licencias/validar", response_model=LicenciaValidarResponse, tags=["Licencias de Software"])
-def api_validar_licencia(body: LicenciaValidarRequest):
+@limiter.limit("10/minute")
+def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
     """
     Valida la clave de licencia provista con la huella digital del hardware del cliente.
     """
