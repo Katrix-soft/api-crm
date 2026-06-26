@@ -27,8 +27,8 @@ COPY productores-asesores-sociedades.csv .
 # En Easypanel debes montar un Volumen Persistente en `/app/data`
 RUN mkdir -p /app/data
 
-ENV PORT=8000
-EXPOSE 8000
+ENV PORT=80
+EXPOSE 80
 
 # Ejecutar FastAPI usando uvicorn
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT}"]
