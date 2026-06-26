@@ -370,10 +370,12 @@ class PaginatedPAS(BaseModel):
 # ─── Licencias de Software ──────────────────────────────────────────────────
 
 class LicenciaCreate(BaseModel):
-    cliente: str = Field(..., min_length=1, description="Nombre del cliente")
-    fecha_expiracion: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="Formato YYYY-MM-DD")
-    estado: Optional[str] = "activa"
-    limite_dispositivos: Optional[int] = 1
+    cliente: str
+    email_cliente: str
+    producto: str = "CRM"
+    fecha_expiracion: str
+    estado: str = "activa"
+    limite_dispositivos: int = 1
 
 class LicenciaUpdate(BaseModel):
     cliente: str
@@ -393,8 +395,9 @@ class LicenciaResponse(BaseModel):
     limite_dispositivos: int
 
 class LicenciaValidarRequest(BaseModel):
-    clave: str = Field(..., min_length=1)
-    dispositivo_id: str = Field(..., min_length=1, description="Huella digital del hardware del cliente")
+    clave: str
+    dispositivo_id: str
+    email_cliente: str = ""
 
 class LicenciaValidarResponse(BaseModel):
     valid: bool

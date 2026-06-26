@@ -795,17 +795,23 @@ def api_list_licencias(current: TokenData = Depends(require_admin)):
 
 @app.post("/licencias/", response_model=MessageResponse, tags=["Licencias de Software"])
 def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_admin)):
-    """Crea y registra una nueva licencia de software. Solo admin."""
-    clave = db.generar_clave_licencia()
+    producto = body.producto.upper()
+    if producto not in ["CRM", "ERP", "POS"]:
+        raise HTTPException(status_code=400, detail=f"Producto inválido. Opciones: CRM, ERP, POS")
+    
+    clave = db.generar_clave_licencia(producto)
     row_id = db.guardar_licencia(
         clave=clave,
         cliente=body.cliente,
+        email_cliente=body.email_cliente,
+        producto=producto,
         fecha_expiracion=body.fecha_expiracion,
-        estado=body.estado or "activa",
-        limite_dispositivos=body.limite_dispositivos or 1
+        estado=body.estado,
+        limite_dispositivos=body.limite_dispositivos
     )
-    db.registrar_log(current.username, "API_CREATE_LICENCIA", f"Cliente: {body.cliente} -> {clave}")
-    return MessageResponse(ok=True, message=f"Licencia creada con ID {row_id} y Clave: {clave}")
+    db.registrar_log(current.username, "API_CREATE_LICENCIA",
+                     f"[{producto}] Cliente: {body.cliente} <{body.email_cliente}> -> {clave}")
+    return MessageResponse(ok=True, message=f"Licencia creada: {clave}")
 
 
 @app.put("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])

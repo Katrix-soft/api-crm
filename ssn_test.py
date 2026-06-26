@@ -2816,15 +2816,50 @@ def exportar_ficha_pdf(pas_data: dict, polizas: list = None, output_path: str = 
 
 
 # ─── CRUD Licencias de Software ───────────────────────────────────────────
-def generar_clave_licencia() -> str:
-    """Genera una clave de licencia con formato KTX-XXXX-XXXX-XXXX"""
-    import secrets
-    import string
+import hmac
+import hashlib
+import string
+import secrets
+from typing import Optional
+import os
+
+LICENSE_SECRET = os.getenv("KATRIX_LICENSE_SECRET", "katrix-license-secret-2026-cambiame")
+
+PRODUCT_CODES = {
+    "CRM": "Katrix Broker CRM",
+    "ERP": "Katrix ERP",
+    "POS": "Katrix POS",
+}
+
+def _firmar_clave(clave: str) -> str:
+    """Genera HMAC-SHA256 de la clave (4 chars). Sirve para verificar autenticidad."""
+    sig = hmac.new(LICENSE_SECRET.encode(), clave.encode(), hashlib.sha256).hexdigest()
+    return sig[:4].upper()
+
+def generar_clave_licencia(producto: str = "CRM") -> str:
+    """KTX-{PRODUCTO}-{RAND1}-{RAND2}-{FIRMA}"""
     chars = string.ascii_uppercase + string.digits
     part1 = "".join(secrets.choice(chars) for _ in range(4))
     part2 = "".join(secrets.choice(chars) for _ in range(4))
-    part3 = "".join(secrets.choice(chars) for _ in range(4))
-    return f"KTX-{part1}-{part2}-{part3}"
+    base = f"KTX-{producto.upper()}-{part1}-{part2}"
+    firma = _firmar_clave(base)
+    return f"{base}-{firma}"
+
+def verificar_firma_clave(clave: str) -> bool:
+    """Verifica que la clave no fue alterada."""
+    partes = clave.strip().upper().split("-")
+    if len(partes) != 5:
+        return False
+    base = "-".join(partes[:4])
+    firma_esperada = _firmar_clave(base)
+    return hmac.compare_digest(partes[4], firma_esperada)
+
+def extraer_producto_clave(clave: str) -> str:
+    """Extrae el código de producto de la clave."""
+    partes = clave.strip().upper().split("-")
+    if len(partes) >= 2:
+        return partes[1]
+    return ""
 
 def obtener_licencias() -> list:
     conn = sqlite3.connect(DB_PATH)
@@ -2844,13 +2879,22 @@ def obtener_licencia_por_clave(clave: str) -> Optional[dict]:
     conn.close()
     return dict(row) if row else None
 
-def guardar_licencia(clave: str, cliente: str, fecha_expiracion: str, estado: str = "activa", limite_dispositivos: int = 1) -> int:
+def guardar_licencia(clave: str, cliente: str, email_cliente: str, 
+                     fecha_expiracion: str, producto: str = "CRM",
+                     estado: str = "activa", limite_dispositivos: int = 1) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    # Asegurar columnas nuevas
+    for col in [("email_cliente", "TEXT"), ("producto", "TEXT DEFAULT 'CRM'")]:
+        try:
+            cursor.execute(f"ALTER TABLE licencias ADD COLUMN {col[0]} {col[1]}")
+        except sqlite3.OperationalError:
+            pass
     cursor.execute("""
-        INSERT INTO licencias (clave, cliente, fecha_expiracion, estado, limite_dispositivos)
-        VALUES (?, ?, ?, ?, ?)
-    """, (clave.strip().upper(), cliente.strip(), fecha_expiracion, estado, limite_dispositivos))
+        INSERT INTO licencias (clave, cliente, email_cliente, producto, fecha_expiracion, estado, limite_dispositivos)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (clave.strip().upper(), cliente.strip(), email_cliente.strip().lower(),
+          producto.upper(), fecha_expiracion, estado, limite_dispositivos))
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -2885,58 +2929,80 @@ def eliminar_licencia(licencia_id: int) -> bool:
     conn.close()
     return ok
 
-def validar_licencia(clave: str, dispositivo_id: str) -> dict:
-    """
-    Valida una clave de licencia.
-    """
+def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "") -> dict:
+    clave = clave.strip().upper()
+    
+    # 1. Verificar firma HMAC
+    if not clave.startswith("KTX-TEST"):  # Excepción para la clave de prueba
+        if not verificar_firma_clave(clave):
+            return {
+                "valid": False,
+                "message": "Clave de licencia inválida o alterada",
+                "cliente": "", "fecha_expiracion": "", "producto": ""
+            }
+    
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM licencias WHERE clave = ?", (clave.strip().upper(),))
+    cursor.execute("SELECT * FROM licencias WHERE clave = ?", (clave,))
     row = cursor.fetchone()
     conn.close()
-    
+
     if not row:
-        return {"valid": False, "message": "Clave de licencia inexistente", "cliente": "", "fecha_expiracion": ""}
-        
+        return {"valid": False, "message": "Clave de licencia inexistente",
+                "cliente": "", "fecha_expiracion": "", "producto": ""}
+
     lic = dict(row)
-    
+
+    # 2. Verificar estado
     if lic["estado"] != "activa":
-        return {"valid": False, "message": f"La licencia está {lic['estado']}", "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"]}
-        
+        return {"valid": False, "message": f"La licencia está {lic['estado']}",
+                "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
+                "producto": lic.get("producto", "")}
+
+    # 3. Verificar expiración
     from datetime import datetime
     try:
-        exp_date = datetime.strptime(lic["fecha_expiracion"], "%Y-%m-%d")
-        if exp_date < datetime.now():
-            return {"valid": False, "message": "La licencia ha expirado", "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"]}
+        if datetime.strptime(lic["fecha_expiracion"], "%Y-%m-%d") < datetime.now():
+            return {"valid": False, "message": "La licencia ha expirado",
+                    "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
+                    "producto": lic.get("producto", "")}
     except ValueError:
         pass
-        
-    registered_devices = []
-    if lic["dispositivo_id"]:
-        registered_devices = [d.strip() for d in lic["dispositivo_id"].split(",") if d.strip()]
-        
+
+    # 4. Verificar email si está registrado
+    email_registrado = lic.get("email_cliente", "")
+    if email_registrado and email_cliente and email_registrado != email_cliente.strip().lower():
+        return {"valid": False, "message": "Email no coincide con la licencia",
+                "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
+                "producto": lic.get("producto", "")}
+
+    # 5. Verificar dispositivos
+    registered_devices = [d.strip() for d in (lic["dispositivo_id"] or "").split(",") if d.strip()]
+    
     if dispositivo_id not in registered_devices:
         if len(registered_devices) >= lic["limite_dispositivos"]:
             return {
-                "valid": False, 
-                "message": f"Límite de dispositivos alcanzado ({lic['limite_dispositivos']})", 
-                "cliente": lic["cliente"], 
-                "fecha_expiracion": lic["fecha_expiracion"]
+                "valid": False,
+                "message": f"Límite de dispositivos alcanzado ({lic['limite_dispositivos']})",
+                "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
+                "producto": lic.get("producto", "")
             }
         registered_devices.append(dispositivo_id)
-        new_disp_str = ",".join(registered_devices)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("UPDATE licencias SET dispositivo_id = ? WHERE id = ?", (new_disp_str, lic["id"]))
+        cursor.execute("UPDATE licencias SET dispositivo_id = ? WHERE id = ?",
+                       (",".join(registered_devices), lic["id"]))
         conn.commit()
         conn.close()
-        
+
     return {
-        "valid": True, 
-        "message": "Licencia válida y activa", 
-        "cliente": lic["cliente"], 
-        "fecha_expiracion": lic["fecha_expiracion"]
+        "valid": True,
+        "message": "Licencia válida y activa",
+        "cliente": lic["cliente"],
+        "fecha_expiracion": lic["fecha_expiracion"],
+        "producto": lic.get("producto", "CRM"),
+        "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software")
     }
 
 
