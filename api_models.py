@@ -393,11 +393,15 @@ class LicenciaResponse(BaseModel):
     fecha_expiracion: str
     estado: str
     limite_dispositivos: int
+    email_cliente: Optional[str] = None
+    producto: Optional[str] = None
+    dispositivos_info: Optional[str] = None
 
 class LicenciaValidarRequest(BaseModel):
     clave: str
     dispositivo_id: str
     email_cliente: str = ""
+    dispositivo_nombre: str = ""
 
 class LicenciaValidarResponse(BaseModel):
     valid: bool
