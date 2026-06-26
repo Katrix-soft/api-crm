@@ -802,7 +802,7 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
     """
     Valida la clave de licencia provista con la huella digital del hardware del cliente.
     """
-    res = db.validar_licencia(body.clave, body.dispositivo_id)
+    res = db.validar_licencia(body.clave, body.dispositivo_id, body.email_cliente, body.dispositivo_nombre)
     return LicenciaValidarResponse(**res)
 
 

@@ -454,6 +454,10 @@ def inicializar_db():
             limite_dispositivos INTEGER DEFAULT 1
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Insertar licencia de prueba por defecto si no hay licencias
     cursor.execute("SELECT COUNT(*) FROM licencias")
@@ -2929,7 +2933,7 @@ def eliminar_licencia(licencia_id: int) -> bool:
     conn.close()
     return ok
 
-def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "") -> dict:
+def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", dispositivo_nombre: str = "") -> dict:
     clave = clave.strip().upper()
     
     # 1. Verificar firma HMAC
@@ -2989,10 +2993,18 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "") -
                 "producto": lic.get("producto", "")
             }
         registered_devices.append(dispositivo_id)
+        
+        import json
+        info = json.loads(lic.get("dispositivos_info") or "{}")
+        info[dispositivo_id] = {
+            "nombre": dispositivo_nombre,
+            "primer_uso": datetime.now().isoformat()[:16]
+        }
+        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("UPDATE licencias SET dispositivo_id = ? WHERE id = ?",
-                       (",".join(registered_devices), lic["id"]))
+        cursor.execute("UPDATE licencias SET dispositivo_id = ?, dispositivos_info = ? WHERE id = ?",
+                       (",".join(registered_devices), json.dumps(info), lic["id"]))
         conn.commit()
         conn.close()
 
