@@ -688,7 +688,9 @@ async function cargarLicencias(){
     licencias = await apiFetch("/licencias/");
     render();
   }catch(err){
-    if (err.message !== "401") showToast("No se pudieron cargar las licencias: " + err.message, true);
+    if (err.message !== "401") {
+      showToast("No se pudieron obtener los datos. Por favor, contacte al administrador del sistema.", true);
+    }
   }
 }
 $("btnRefrescar").addEventListener("click", cargarLicencias);
