@@ -277,6 +277,22 @@
   </div>
 </div>
 
+<!-- ============ MODAL: Confirmación Personalizada (Premium) ============ -->
+<div class="modal-overlay" id="confirmModalOverlay" style="display:none;">
+  <div class="modal" style="max-width: 420px; border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+    <h2 id="confirmModalTitle">Confirmar Acción</h2>
+    <p id="confirmModalMessage" style="font-size:14px; color:var(--muted); line-height: 1.5; margin-bottom: 16px;"></p>
+    <div id="confirmPromptField" class="field" style="display:none; margin-bottom: 16px;">
+      <label id="confirmPromptLabel" style="font-size:12px; color:var(--muted); display:block; margin-bottom:6px;"></label>
+      <input id="confirmPromptInput" type="text" style="width:100%;" />
+    </div>
+    <div class="modal-actions" style="margin-top:20px;">
+      <button class="btn-ghost" id="btnCancelConfirm">Cancelar</button>
+      <button class="btn-primary" id="btnAcceptConfirm">Aceptar</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script src="/panel/katrix-biometrics.js"></script>
@@ -590,6 +606,34 @@ $("btnConfirmBio").addEventListener("click", async () => {
   }
 });
 
+function customConfirm({ title, message, promptLabel, promptValue, onAccept }) {
+  $("confirmModalTitle").textContent = title || "Confirmar Acción";
+  $("confirmModalMessage").textContent = message || "";
+  
+  const promptField = $("confirmPromptField");
+  const promptInput = $("confirmPromptInput");
+  
+  if (promptLabel) {
+    $("confirmPromptLabel").textContent = promptLabel;
+    promptInput.value = promptValue || "";
+    promptField.style.display = "block";
+  } else {
+    promptField.style.display = "none";
+  }
+  
+  $("confirmModalOverlay").style.display = "flex";
+  
+  $("btnAcceptConfirm").onclick = () => {
+    const val = promptLabel ? promptInput.value.trim() : null;
+    $("confirmModalOverlay").style.display = "none";
+    if (onAccept) onAccept(val);
+  };
+  
+  $("btnCancelConfirm").onclick = () => {
+    $("confirmModalOverlay").style.display = "none";
+  };
+}
+
 /* ---------------- DATOS ---------------- */
 
 function diasRestantes(fechaISO){
@@ -683,34 +727,66 @@ $("tablaBody").addEventListener("click", async (e)=>{
   }
 
   if (accion === "eliminar"){
-    if (!confirm(`¿Eliminar definitivamente la licencia de "${lic.cliente}"? Esta acción no se puede deshacer.`)) return;
-    try{
-      await apiFetch(`/licencias/${id}`, { method: "DELETE" });
-      showToast("Licencia eliminada.");
-      cargarLicencias();
-    }catch(err){ showToast(err.message, true); }
+    customConfirm({
+      title: "Eliminar Licencia",
+      message: `¿Eliminar definitivamente la licencia de "${lic.cliente}"? Esta acción no se puede deshacer.`,
+      onAccept: async () => {
+        try{
+          await apiFetch(`/licencias/${id}`, { method: "DELETE" });
+          showToast("Licencia eliminada.");
+          cargarLicencias();
+        }catch(err){ showToast(err.message, true); }
+      }
+    });
     return;
   }
 
-  // suspender / reactivar -> PUT con todos los campos requeridos por LicenciaUpdate
   const nuevoEstado = accion === "suspender" ? "suspendida" : "activa";
-  const motivo = accion === "suspender" ? prompt("Motivo de la suspensión (ej: falta de pago):", "falta_de_pago") : null;
-  if (accion === "suspender" && motivo === null) return; // canceló el prompt
-
-  try{
-    await apiFetch(`/licencias/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        cliente: lic.cliente,
-        fecha_expiracion: lic.fecha_expiracion,
-        estado: nuevoEstado,
-        limite_dispositivos: lic.limite_dispositivos,
-        dispositivo_id: lic.dispositivo_id || null,
-      }),
+  if (accion === "suspender") {
+    customConfirm({
+      title: "Suspender Licencia",
+      message: `¿Estás seguro de que deseas suspender la licencia de "${lic.cliente}"?`,
+      promptLabel: "Motivo de la suspensión (ej: falta de pago):",
+      promptValue: "falta_de_pago",
+      onAccept: async (motivo) => {
+        try{
+          await apiFetch(`/licencias/${id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              cliente: lic.cliente,
+              fecha_expiracion: lic.fecha_expiracion,
+              estado: nuevoEstado,
+              limite_dispositivos: lic.limite_dispositivos,
+              dispositivo_id: lic.dispositivo_id || null,
+            }),
+          });
+          showToast("Licencia suspendida.");
+          cargarLicencias();
+        }catch(err){ showToast(err.message, true); }
+      }
     });
-    showToast(accion === "suspender" ? "Licencia suspendida." : "Licencia reactivada.");
-    cargarLicencias();
-  }catch(err){ showToast(err.message, true); }
+  } else {
+    customConfirm({
+      title: "Reactivar Licencia",
+      message: `¿Deseas reactivar la licencia de "${lic.cliente}"?`,
+      onAccept: async () => {
+        try{
+          await apiFetch(`/licencias/${id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              cliente: lic.cliente,
+              fecha_expiracion: lic.fecha_expiracion,
+              estado: nuevoEstado,
+              limite_dispositivos: lic.limite_dispositivos,
+              dispositivo_id: lic.dispositivo_id || null,
+            }),
+          });
+          showToast("Licencia reactivada.");
+          cargarLicencias();
+        }catch(err){ showToast(err.message, true); }
+      }
+    });
+  }
 });
 
 /* ---------------- MODAL NUEVA / EDITAR ---------------- */
