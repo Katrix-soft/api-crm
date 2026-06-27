@@ -357,8 +357,10 @@ async function login(){
   API_BASE = base;
 
   try{
-    const endpoint = username === "panel_admin" ? "/panel/auth/login" : "/auth/login";
-    const res = await fetch(API_BASE + endpoint, {
+    if (username !== "panel_admin") {
+      throw new Error("El panel de control requiere credenciales dedicadas del panel de licencias (panel_admin).");
+    }
+    const res = await fetch(API_BASE + "/panel/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
@@ -368,8 +370,8 @@ async function login(){
       throw new Error(j.detail || "Usuario o contraseña incorrectos");
     }
     const data = await res.json();
-    if (data.role !== "admin" && data.role !== "panel_admin"){
-      throw new Error("Solo un usuario administrador puede gestionar licencias.");
+    if (data.role !== "panel_admin"){
+      throw new Error("Acceso denegado: rol de administrador del panel requerido.");
     }
     TOKEN = data.access_token;
     USER = data;
@@ -438,9 +440,14 @@ async function checkBiometricsSupport() {
   const u = sessionStorage.getItem("katrix_user");
   const b = sessionStorage.getItem("katrix_api_base");
   if (t && u && b){
-    TOKEN = t; USER = JSON.parse(u); API_BASE = b;
-    $("apiBase").value = API_BASE;
-    mostrarDashboard();
+    const parsedUser = JSON.parse(u);
+    if (parsedUser.username === "panel_admin") {
+      TOKEN = t; USER = parsedUser; API_BASE = b;
+      $("apiBase").value = API_BASE;
+      mostrarDashboard();
+    } else {
+      cerrarSesion();
+    }
   }
   
   // Verificar soporte biométrico al cargar
