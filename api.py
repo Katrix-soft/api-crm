@@ -134,6 +134,14 @@ def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
 def require_licencias_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
     if current.role not in ["admin", "panel_admin"]:
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador de licencias o administrador general")
+    if current.role == "panel_admin":
+        stored_username = db.obtener_panel_username()
+        if current.username != stored_username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sesión expirada por cambio de credenciales",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     return current
 
 

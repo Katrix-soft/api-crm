@@ -584,14 +584,8 @@ $("btnConfirmChangePass").addEventListener("click", async () => {
       body: JSON.stringify(payload)
     });
     
-    if (new_username) {
-      USER.username = new_username;
-      sessionStorage.setItem("katrix_user", JSON.stringify(USER));
-      $("userInfo").textContent = `Conectado como ${USER.username} · ${API_BASE}`;
-      showToast("Usuario y contraseña del panel actualizados con éxito.");
-    } else {
-      showToast("Contraseña del panel actualizada con éxito.");
-    }
+    showToast("Credenciales actualizadas. Iniciá sesión con tus nuevos datos.");
+    cerrarSesion();
     $("modalChangePassOverlay").style.display = "none";
   } catch(e) {
     errBox.textContent = e.message;
