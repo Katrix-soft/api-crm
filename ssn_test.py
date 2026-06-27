@@ -2996,15 +2996,21 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         
         import json
         info = json.loads(lic.get("dispositivos_info") or "{}")
-        info[dispositivo_id] = {
-            "nombre": dispositivo_nombre,
-            "primer_uso": datetime.now().isoformat()[:16]
-        }
+        
+        try:
+            detalle = json.loads(dispositivo_nombre)
+            if not isinstance(detalle, dict):
+                detalle = {"nombre": str(dispositivo_nombre)}
+        except Exception:
+            detalle = {"nombre": dispositivo_nombre}
+            
+        detalle["primer_uso"] = datetime.now().isoformat()[:16]
+        info[dispositivo_id] = detalle
         
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE licencias SET dispositivo_id = ?, dispositivos_info = ? WHERE id = ?",
-                       (",".join(registered_devices), json.dumps(info), lic["id"]))
+                       (",".join(registered_devices), json.dumps(info, ensure_ascii=False), lic["id"]))
         conn.commit()
         conn.close()
 
