@@ -454,6 +454,29 @@ def inicializar_db():
             limite_dispositivos INTEGER DEFAULT 1
         )
     """)
+    
+    # Crear tablas para el Panel de Licencias Independiente y Biometría
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS panel_settings (
+            clave TEXT PRIMARY KEY,
+            valor TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS panel_biometrics (
+            credential_id TEXT PRIMARY KEY,
+            public_key TEXT NOT NULL,
+            dispositivo_nombre TEXT,
+            creado_en TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    
+    # Inicializar contraseña por defecto del panel (admin123) si no existe
+    cursor.execute("SELECT COUNT(*) FROM panel_settings WHERE clave = 'password_hash'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hash_password("admin123")))
+
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
     except sqlite3.OperationalError:
@@ -3022,6 +3045,75 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         "producto": lic.get("producto", "CRM"),
         "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software")
     }
+
+
+def obtener_panel_password_hash() -> str:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT valor FROM panel_settings WHERE clave = 'password_hash'")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    # Si no existía, inicializar con admin123
+    hashed = hash_password("admin123")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hashed))
+    conn.commit()
+    conn.close()
+    return hashed
+
+
+def actualizar_panel_password(nueva_pass: str):
+    hashed = hash_password(nueva_pass)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hashed))
+    conn.commit()
+    conn.close()
+
+
+def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nombre: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO panel_biometrics (credential_id, public_key, dispositivo_nombre)
+        VALUES (?, ?, ?)
+    """, (credential_id, public_key, dispositivo_nombre))
+    conn.commit()
+    conn.close()
+
+
+def obtener_panel_biometric(credential_id: str) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT credential_id, public_key, dispositivo_nombre FROM panel_biometrics WHERE credential_id = ?", (credential_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "credential_id": row[0],
+            "public_key": row[1],
+            "dispositivo_nombre": row[2]
+        }
+    return None
+
+
+def obtener_todos_panel_biometrics() -> list:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT credential_id, dispositivo_nombre, creado_en FROM panel_biometrics ORDER BY creado_en DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "credential_id": r[0],
+            "dispositivo_nombre": r[1],
+            "creado_en": r[2]
+        }
+        for r in rows
+    ]
 
 
 # ─── MAIN ────────────────────────────────────────────────

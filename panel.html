@@ -135,6 +135,9 @@
       <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password" />
     </div>
     <button class="btn-primary" id="btnLogin">Ingresar</button>
+    <button class="btn-ghost" id="btnBioLogin" style="margin-top:10px; width:100%; display:none; align-items:center; justify-content:center; gap:8px;">
+      <span style="font-size:16px;">👤</span> Ingresar con Biometría
+    </button>
     <div id="loginError"></div>
   </div>
 </div>
@@ -147,6 +150,8 @@
       <p id="userInfo"></p>
     </div>
     <div style="display:flex; gap:8px;">
+      <button class="btn-ghost" id="btnChangePass" style="display:none;">🔐 Cambiar Clave Panel</button>
+      <button class="btn-ghost" id="btnRegBio" style="display:none;">👤 Registrar Huella</button>
       <button class="btn-ghost" id="btnNueva"><span style="margin-right:6px;">+</span>Nueva licencia</button>
       <button class="btn-ghost" id="btnLogout">Salir</button>
     </div>
@@ -231,19 +236,52 @@
   </div>
 </div>
 
+<!-- ============ MODAL: Cambiar contraseña del panel ============ -->
+<div class="modal-overlay" id="modalChangePassOverlay" style="display:none;">
+  <div class="modal">
+    <h2>Cambiar Contraseña del Panel</h2>
+    <div class="field">
+      <label>Contraseña actual del panel</label>
+      <input id="fCurrentPass" type="password" placeholder="••••••••" />
+    </div>
+    <div class="field">
+      <label>Nueva contraseña del panel</label>
+      <input id="fNewPass" type="password" placeholder="••••••••" />
+    </div>
+    <div class="field">
+      <label>Confirmar nueva contraseña</label>
+      <input id="fConfirmPass" type="password" placeholder="••••••••" />
+    </div>
+    <div id="changePassError" style="color:var(--red); font-size:13px; margin-top:8px; display:none;"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btnCancelChangePass">Cancelar</button>
+      <button class="btn-primary" id="btnConfirmChangePass">Actualizar Contraseña</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: Registrar biometría ============ -->
+<div class="modal-overlay" id="modalBiometricsOverlay" style="display:none;">
+  <div class="modal">
+    <h2>Registrar Huella / Biometría</h2>
+    <p style="font-size:13px; color:var(--muted); margin-bottom:14px;">Esto te permitirá iniciar sesión directamente con el sensor de huellas o reconocimiento facial de este dispositivo.</p>
+    <div class="field">
+      <label>Nombre descriptivo de este dispositivo</label>
+      <input id="fBioDeviceName" type="text" placeholder="Ej. Mi Laptop, Celular Personal" />
+    </div>
+    <div id="bioError" style="color:var(--red); font-size:13px; margin-top:8px; display:none;"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btnCancelBio">Cancelar</button>
+      <button class="btn-primary" id="btnConfirmBio">Iniciar Registro</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
-<script>
-/* ========================================================================
-   PANEL DE LICENCIAS — conectado a tu Katrix ERP API real
-   Endpoints usados (de tu api.py):
-     POST   /auth/login            { username, password }
-     GET    /licencias/            (requiere admin)
-     POST   /licencias/            (requiere admin)
-     PUT    /licencias/{id}        (requiere admin)
-     DELETE /licencias/{id}        (requiere admin)
-   ======================================================================== */
+<script src="/panel/katrix-biometrics.js"></script>
 
+<script>
 let API_BASE = "";
 let TOKEN = "";
 let USER = null;
@@ -303,7 +341,8 @@ async function login(){
   API_BASE = base;
 
   try{
-    const res = await fetch(API_BASE + "/auth/login", {
+    const endpoint = username === "panel_admin" ? "/panel/auth/login" : "/auth/login";
+    const res = await fetch(API_BASE + endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
@@ -313,7 +352,7 @@ async function login(){
       throw new Error(j.detail || "Usuario o contraseña incorrectos");
     }
     const data = await res.json();
-    if (data.role !== "admin"){
+    if (data.role !== "admin" && data.role !== "panel_admin"){
       throw new Error("Solo un usuario administrador puede gestionar licencias.");
     }
     TOKEN = data.access_token;
@@ -341,19 +380,215 @@ function mostrarDashboard(){
   $("loginScreen").style.display = "none";
   $("dashboard").style.display = "block";
   $("userInfo").textContent = `Conectado como ${USER.username} · ${API_BASE}`;
+  
+  if (USER.username === "panel_admin") {
+    $("btnChangePass").style.display = "inline-flex";
+    $("btnRegBio").style.display = "inline-flex";
+  } else {
+    $("btnChangePass").style.display = "none";
+    $("btnRegBio").style.display = "none";
+  }
+  
   cargarLicencias();
+}
+
+async function checkBiometricsSupport() {
+  try {
+    const supported = await KatrixBiometrics.isSupported();
+    if (!supported) return;
+
+    // Obtener las credenciales registradas del servidor
+    const res = await fetch(API_BASE + "/panel/auth/biometrics/credentials");
+    if (res.ok) {
+      const creds = await res.json();
+      if (creds && creds.length > 0) {
+        $("btnBioLogin").style.display = "flex";
+        window.allowedCredentials = creds;
+      } else {
+        $("btnBioLogin").style.display = "none";
+      }
+    }
+  } catch(e) {
+    console.warn("Biometrics check failed: ", e);
+  }
 }
 
 /* Restaurar sesión si ya había una en esta pestaña */
 (function restaurar(){
+  $("apiBase").value = window.location.origin;
+  API_BASE = window.location.origin;
+
   const t = sessionStorage.getItem("katrix_token");
   const u = sessionStorage.getItem("katrix_user");
   const b = sessionStorage.getItem("katrix_api_base");
   if (t && u && b){
     TOKEN = t; USER = JSON.parse(u); API_BASE = b;
+    $("apiBase").value = API_BASE;
     mostrarDashboard();
   }
+  
+  // Verificar soporte biométrico al cargar
+  checkBiometricsSupport();
 })();
+
+
+// Eventos de Autenticación Biométrica y Cambio de Clave
+$("btnBioLogin").addEventListener("click", async () => {
+  const base = $("apiBase").value.trim().replace(/\/$/, "");
+  const errBox = $("loginError");
+  errBox.style.display = "none";
+  API_BASE = base;
+
+  if (!window.allowedCredentials || window.allowedCredentials.length === 0) {
+    errBox.textContent = "No hay biométricos registrados para este servidor.";
+    errBox.style.display = "block";
+    return;
+  }
+
+  try {
+    // 1. Obtener challenge
+    const challengeRes = await fetch(API_BASE + "/panel/auth/biometrics/challenge");
+    if (!challengeRes.ok) throw new Error("No se pudo obtener el reto biométrico.");
+    const challengeData = await challengeRes.json();
+
+    // 2. Solicitar autenticación biométrica local
+    showToast("Colocá tu huella o usá el reconocimiento facial...");
+    const assertion = await KatrixBiometrics.loginCredential(
+      challengeData.challenge,
+      window.allowedCredentials
+    );
+
+    // 3. Enviar firma biométrica al backend
+    const loginRes = await fetch(API_BASE + "/panel/auth/biometrics/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credential_id: assertion.credentialId,
+        signature: assertion.signature,
+        authenticator_data: assertion.authenticatorData,
+        client_data_json: assertion.clientDataJSON,
+        challenge_token: challengeData.challenge_token
+      })
+    });
+
+    if (!loginRes.ok) {
+      const j = await loginRes.json().catch(() => ({}));
+      throw new Error(j.detail || "Fallo en la autenticación biométrica");
+    }
+
+    const data = await loginRes.json();
+    TOKEN = data.access_token;
+    USER = data;
+    sessionStorage.setItem("katrix_token", TOKEN);
+    sessionStorage.setItem("katrix_api_base", API_BASE);
+    sessionStorage.setItem("katrix_user", JSON.stringify(USER));
+    mostrarDashboard();
+    showToast("¡Inicio de sesión biométrico exitoso!");
+  } catch (err) {
+    errBox.textContent = err.message;
+    errBox.style.display = "block";
+    showToast(err.message, true);
+  }
+});
+
+// MODAL: Cambiar contraseña
+$("btnChangePass").addEventListener("click", () => {
+  $("fCurrentPass").value = "";
+  $("fNewPass").value = "";
+  $("fConfirmPass").value = "";
+  $("changePassError").style.display = "none";
+  $("modalChangePassOverlay").style.display = "flex";
+});
+
+$("btnCancelChangePass").addEventListener("click", () => {
+  $("modalChangePassOverlay").style.display = "none";
+});
+
+$("btnConfirmChangePass").addEventListener("click", async () => {
+  const current_password = $("fCurrentPass").value;
+  const new_password = $("fNewPass").value;
+  const confirm_password = $("fConfirmPass").value;
+  const errBox = $("changePassError");
+  errBox.style.display = "none";
+
+  if (!current_password || !new_password || !confirm_password) {
+    errBox.textContent = "Completá todos los campos.";
+    errBox.style.display = "block";
+    return;
+  }
+
+  if (new_password !== confirm_password) {
+    errBox.textContent = "Las contraseñas nuevas no coinciden.";
+    errBox.style.display = "block";
+    return;
+  }
+
+  try {
+    await apiFetch("/panel/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password })
+    });
+    showToast("Contraseña del panel actualizada con éxito.");
+    $("modalChangePassOverlay").style.display = "none";
+  } catch(e) {
+    errBox.textContent = e.message;
+    errBox.style.display = "block";
+  }
+});
+
+// MODAL: Registrar huella
+$("btnRegBio").addEventListener("click", () => {
+  $("fBioDeviceName").value = "";
+  $("bioError").style.display = "none";
+  $("modalBiometricsOverlay").style.display = "flex";
+});
+
+$("btnCancelBio").addEventListener("click", () => {
+  $("modalBiometricsOverlay").style.display = "none";
+});
+
+$("btnConfirmBio").addEventListener("click", async () => {
+  const dispositivo_nombre = $("fBioDeviceName").value.trim();
+  const errBox = $("bioError");
+  errBox.style.display = "none";
+
+  if (!dispositivo_nombre) {
+    errBox.textContent = "Completá el nombre del dispositivo.";
+    errBox.style.display = "block";
+    return;
+  }
+
+  try {
+    // 1. Obtener challenge
+    const challengeRes = await apiFetch("/panel/auth/biometrics/challenge");
+    
+    // 2. Registrar en hardware del cliente
+    showToast("Colocá tu huella en el lector...");
+    const cred = await KatrixBiometrics.registerCredential("panel_admin", challengeRes.challenge);
+
+    // 3. Enviar registro al servidor
+    await apiFetch("/panel/auth/biometrics/register", {
+      method: "POST",
+      body: JSON.stringify({
+        username: "panel_admin",
+        credential_id: cred.credentialId,
+        public_key_der: cred.publicKeyDer,
+        dispositivo_nombre: dispositivo_nombre,
+        challenge_token: challengeRes.challenge_token
+      })
+    });
+
+    showToast("¡Dispositivo biométrico registrado exitosamente!");
+    $("modalBiometricsOverlay").style.display = "none";
+    
+    // Recargar credenciales para el botón de login
+    await checkBiometricsSupport();
+  } catch(e) {
+    errBox.textContent = e.message;
+    errBox.style.display = "block";
+    showToast(e.message, true);
+  }
+});
 
 /* ---------------- DATOS ---------------- */
 

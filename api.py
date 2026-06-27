@@ -20,6 +20,30 @@ from slowapi.errors import RateLimitExceeded
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ssn_test as db
 from api_models import *
+import katrix_biometrics
+
+# ─── Pydantic Models para Panel y Biometría ──────────────────────────────────
+class PanelLoginRequest(BaseModel):
+    username: str
+    password: str
+
+class PanelChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+class BiometricRegisterRequest(BaseModel):
+    username: str
+    credential_id: str
+    public_key_der: str
+    dispositivo_nombre: str
+    challenge_token: str
+
+class BiometricLoginRequest(BaseModel):
+    credential_id: str
+    signature: str
+    authenticator_data: str
+    client_data_json: str
+    challenge_token: str
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 SECRET_KEY  = os.getenv("KATRIX_SECRET_KEY", "cambia-esta-clave-en-produccion-2026")
@@ -103,6 +127,12 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
 def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
     if current.role != "admin":
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
+    return current
+
+
+def require_licencias_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
+    if current.role not in ["admin", "panel_admin"]:
+        raise HTTPException(status_code=403, detail="Se requiere rol de administrador de licencias o administrador general")
     return current
 
 
@@ -808,14 +838,14 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
 
 
 @app.get("/licencias/", response_model=List[LicenciaResponse], tags=["Licencias de Software"])
-def api_list_licencias(current: TokenData = Depends(require_admin)):
-    """Lista todas las licencias del sistema. Solo admin."""
+def api_list_licencias(current: TokenData = Depends(require_licencias_admin)):
+    """Lista todas las licencias del sistema. Solo admin de licencias."""
     lics = db.obtener_licencias()
     return [LicenciaResponse(**l) for l in lics]
 
 
 @app.post("/licencias/", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_admin)):
+def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_licencias_admin)):
     producto = body.producto.upper()
     if producto not in ["CRM", "ERP", "POS"]:
         raise HTTPException(status_code=400, detail=f"Producto inválido. Opciones: CRM, ERP, POS")
@@ -836,7 +866,7 @@ def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(requi
 
 
 @app.put("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = Depends(require_admin)):
+def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = Depends(require_licencias_admin)):
     """Actualiza los datos de una licencia. Solo admin."""
     ok = db.actualizar_licencia(
         licencia_id=lic_id,
@@ -853,7 +883,7 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
 
 
 @app.delete("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_admin)):
+def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
     """Elimina una licencia. Solo admin."""
     ok = db.eliminar_licencia(lic_id)
     if not ok:
@@ -872,6 +902,137 @@ def servir_panel():
     if not os.path.exists(PANEL_PATH):
         raise HTTPException(status_code=404, detail="panel.html no encontrado en el servidor")
     return FileResponse(PANEL_PATH, media_type="text/html")
+
+
+@app.get("/panel/katrix-biometrics.js", tags=["Panel"])
+def get_katrix_biometrics_js():
+    """Sirve el frontend JavaScript de la librería biométrica."""
+    js_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katrix-biometrics.js")
+    if not os.path.exists(js_path):
+        raise HTTPException(status_code=404, detail="katrix-biometrics.js no encontrado")
+    return FileResponse(js_path, media_type="application/javascript")
+
+
+# ─── PANEL AUTH & BIOMETRICS ──────────────────────────────────────────────────
+
+@app.post("/panel/auth/login", response_model=Token, tags=["Panel Auth"])
+@limiter.limit("5/minute")
+def panel_login(request: Request, body: PanelLoginRequest):
+    if body.username != "panel_admin":
+        raise HTTPException(status_code=401, detail="Usuario de panel incorrecto")
+        
+    stored_hash = db.obtener_panel_password_hash()
+    if not db.verify_password(stored_hash, body.password):
+        raise HTTPException(status_code=401, detail="Contraseña de panel incorrecta")
+        
+    token = create_token({
+        "user_id":  999,
+        "username": "panel_admin",
+        "role":     "panel_admin",
+        "matricula": None
+    })
+    
+    db.registrar_log("panel_admin", "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
+    
+    return Token(
+        access_token=token,
+        token_type="bearer",
+        role="panel_admin",
+        user_id=999,
+        username="panel_admin"
+    )
+
+@app.post("/panel/auth/change-password", response_model=MessageResponse, tags=["Panel Auth"])
+def panel_change_password(body: PanelChangePasswordRequest, current: TokenData = Depends(require_licencias_admin)):
+    if current.username != "panel_admin":
+        raise HTTPException(status_code=403, detail="Solo el panel_admin puede cambiar esta contraseña")
+        
+    stored_hash = db.obtener_panel_password_hash()
+    if not db.verify_password(stored_hash, body.current_password):
+        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+        
+    db.actualizar_panel_password(body.new_password)
+    db.registrar_log("panel_admin", "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
+    return MessageResponse(ok=True, message="Contraseña de panel actualizada correctamente")
+
+@app.get("/panel/auth/biometrics/challenge", tags=["Panel Auth"])
+def panel_biometrics_challenge():
+    challenge = katrix_biometrics.generar_challenge()
+    # Generar un token temporal firmado que expira en 2 minutos para evitar mantener estado en el servidor
+    challenge_token = jwt.encode(
+        {
+            "challenge": challenge, 
+            "exp": datetime.utcnow() + timedelta(minutes=2)
+        }, 
+        SECRET_KEY, 
+        algorithm=ALGORITHM
+    )
+    return {"challenge": challenge, "challenge_token": challenge_token}
+
+@app.post("/panel/auth/biometrics/register", response_model=MessageResponse, tags=["Panel Auth"])
+def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData = Depends(require_licencias_admin)):
+    if current.username != "panel_admin":
+        raise HTTPException(status_code=403, detail="Solo el panel_admin puede registrar biométricos")
+        
+    try:
+        payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
+        challenge = payload.get("challenge")
+        if not challenge:
+            raise HTTPException(status_code=400, detail="Token de reto inválido")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
+        
+    db.guardar_panel_biometric(body.credential_id, body.public_key_der, body.dispositivo_nombre)
+    db.registrar_log("panel_admin", "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
+    return MessageResponse(ok=True, message="Dispositivo biométrico registrado exitosamente")
+
+@app.post("/panel/auth/biometrics/login", response_model=Token, tags=["Panel Auth"])
+@limiter.limit("5/minute")
+def panel_biometrics_login(request: Request, body: BiometricLoginRequest):
+    try:
+        payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
+        challenge = payload.get("challenge")
+        if not challenge:
+            raise HTTPException(status_code=400, detail="Token de reto inválido")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
+        
+    cred = db.obtener_panel_biometric(body.credential_id)
+    if not cred:
+        raise HTTPException(status_code=401, detail="Dispositivo biométrico no registrado")
+        
+    valida, motivo = katrix_biometrics.verificar_firma_biometrica(
+        public_key_der_b64=cred["public_key"],
+        signature_b64=body.signature,
+        authenticator_data_b64=body.authenticator_data,
+        client_data_json_b64=body.client_data_json,
+        challenge_original=challenge
+    )
+    
+    if not valida:
+        raise HTTPException(status_code=401, detail=f"Fallo biométrico: {motivo}")
+        
+    token = create_token({
+        "user_id":  999,
+        "username": "panel_admin",
+        "role":     "panel_admin",
+        "matricula": None
+    })
+    
+    db.registrar_log("panel_admin", "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
+    
+    return Token(
+        access_token=token,
+        token_type="bearer",
+        role="panel_admin",
+        user_id=999,
+        username="panel_admin"
+    )
+
+@app.get("/panel/auth/biometrics/credentials", tags=["Panel Auth"])
+def panel_biometrics_credentials():
+    creds = db.obtener_todos_panel_biometrics()
+    return [c["credential_id"] for c in creds]
 
 
 @app.get("/health", tags=["Sistema"])

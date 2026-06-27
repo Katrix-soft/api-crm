@@ -23,6 +23,8 @@ COPY ssn_test.py .
 COPY utils.py .
 COPY productores-asesores-sociedades.csv .
 COPY panel.html .
+COPY katrix_biometrics.py .
+COPY katrix-biometrics.js .
 
 # Crear el directorio para la base de datos persistente (SQLite)
 # En Easypanel debes montar un Volumen Persistente en `/app/data`
