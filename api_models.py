@@ -383,6 +383,7 @@ class LicenciaUpdate(BaseModel):
     estado: str = Field(..., description="activa | expirada | suspendida")
     limite_dispositivos: int
     dispositivo_id: Optional[str] = None
+    motivo: Optional[str] = None
 
 class LicenciaResponse(BaseModel):
     id: int
@@ -396,6 +397,7 @@ class LicenciaResponse(BaseModel):
     email_cliente: Optional[str] = None
     producto: Optional[str] = None
     dispositivos_info: Optional[str] = None
+    motivo: Optional[str] = None
 
 class LicenciaValidarRequest(BaseModel):
     clave: str

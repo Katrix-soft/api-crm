@@ -801,6 +801,7 @@ $("tablaBody").addEventListener("click", async (e)=>{
               estado: nuevoEstado,
               limite_dispositivos: lic.limite_dispositivos,
               dispositivo_id: lic.dispositivo_id || null,
+              motivo: motivo || "falta_de_pago"
             }),
           });
           showToast("Licencia suspendida.");
@@ -822,6 +823,7 @@ $("tablaBody").addEventListener("click", async (e)=>{
               estado: nuevoEstado,
               limite_dispositivos: lic.limite_dispositivos,
               dispositivo_id: lic.dispositivo_id || null,
+              motivo: null
             }),
           });
           showToast("Licencia reactivada.");
@@ -872,6 +874,7 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
           estado: lic ? lic.estado : "activa",
           limite_dispositivos: limite,
           dispositivo_id: lic ? lic.dispositivo_id || null : null,
+          motivo: lic ? lic.motivo || null : null
         }),
       });
       showToast("Licencia actualizada.");

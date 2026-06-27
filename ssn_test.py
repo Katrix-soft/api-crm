@@ -2932,21 +2932,25 @@ def guardar_licencia(clave: str, cliente: str, email_cliente: str,
     conn.close()
     return row_id
 
-def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None) -> bool:
+def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None, motivo: Optional[str] = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE licencias ADD COLUMN motivo TEXT")
+    except sqlite3.OperationalError:
+        pass
     if dispositivo_id is not None:
         cursor.execute("""
             UPDATE licencias 
-            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, dispositivo_id=?
+            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, dispositivo_id=?, motivo=?
             WHERE id=?
-        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, dispositivo_id, licencia_id))
+        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, dispositivo_id, motivo, licencia_id))
     else:
         cursor.execute("""
             UPDATE licencias 
-            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?
+            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, motivo=?
             WHERE id=?
-        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, licencia_id))
+        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, motivo, licencia_id))
     ok = cursor.rowcount > 0
     conn.commit()
     conn.close()
@@ -2988,7 +2992,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
 
     # 2. Verificar estado
     if lic["estado"] != "activa":
-        return {"valid": False, "message": f"La licencia está {lic['estado']}",
+        motivo_str = f" (Motivo: {lic['motivo']})" if lic.get("motivo") else ""
+        return {"valid": False, "message": f"La licencia está {lic['estado']}{motivo_str}",
                 "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
                 "producto": lic.get("producto", "")}
 
