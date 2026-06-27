@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -863,6 +864,16 @@ def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_admin)
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 
+PANEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
+
+@app.get("/panel", tags=["Panel"])
+def servir_panel():
+    """Sirve el panel de control de licencias (HTML estático)."""
+    if not os.path.exists(PANEL_PATH):
+        raise HTTPException(status_code=404, detail="panel.html no encontrado en el servidor")
+    return FileResponse(PANEL_PATH, media_type="text/html")
+
+
 @app.get("/health", tags=["Sistema"])
 def health():
     """Verificar que la API está funcionando."""
@@ -888,17 +899,4 @@ def health():
             "panel": ["/panel"],
         }
     }
-
-
-@app.get("/panel", tags=["Panel"])
-def get_panel_web():
-    """Sirve el panel de administración de licencias HTML."""
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base_dir, "panel.html")
-        with open(path, "r", encoding="utf-8") as f:
-            html = f.read()
-        return Response(content=html, media_type="text/html")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al cargar el panel: {str(e)}")
 
