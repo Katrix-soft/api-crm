@@ -30,6 +30,7 @@ class PanelLoginRequest(BaseModel):
 class PanelChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+    new_username: Optional[str] = None
 
 class BiometricRegisterRequest(BaseModel):
     username: str
@@ -918,7 +919,8 @@ def get_katrix_biometrics_js():
 @app.post("/panel/auth/login", response_model=Token, tags=["Panel Auth"])
 @limiter.limit("5/minute")
 def panel_login(request: Request, body: PanelLoginRequest):
-    if body.username != "panel_admin":
+    stored_username = db.obtener_panel_username()
+    if body.username != stored_username:
         raise HTTPException(status_code=401, detail="Usuario de panel incorrecto")
         
     stored_hash = db.obtener_panel_password_hash()
@@ -927,33 +929,40 @@ def panel_login(request: Request, body: PanelLoginRequest):
         
     token = create_token({
         "user_id":  999,
-        "username": "panel_admin",
+        "username": stored_username,
         "role":     "panel_admin",
         "matricula": None
     })
     
-    db.registrar_log("panel_admin", "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
+    db.registrar_log(stored_username, "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
     
     return Token(
         access_token=token,
         token_type="bearer",
         role="panel_admin",
         user_id=999,
-        username="panel_admin"
+        username=stored_username
     )
 
 @app.post("/panel/auth/change-password", response_model=MessageResponse, tags=["Panel Auth"])
 def panel_change_password(body: PanelChangePasswordRequest, current: TokenData = Depends(require_licencias_admin)):
-    if current.username != "panel_admin":
-        raise HTTPException(status_code=403, detail="Solo el panel_admin puede cambiar esta contraseña")
+    stored_username = db.obtener_panel_username()
+    if current.username != stored_username:
+        raise HTTPException(status_code=403, detail="Solo el administrador del panel puede cambiar estas credenciales")
         
     stored_hash = db.obtener_panel_password_hash()
     if not db.verify_password(stored_hash, body.current_password):
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
         
     db.actualizar_panel_password(body.new_password)
-    db.registrar_log("panel_admin", "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
-    return MessageResponse(ok=True, message="Contraseña de panel actualizada correctamente")
+    
+    if body.new_username and body.new_username.strip():
+        db.actualizar_panel_username(body.new_username.strip())
+        db.registrar_log(body.new_username.strip(), "PANEL_CHANGE_USER_PASS", f"Cambio de usuario y contraseña del panel (De {stored_username} a {body.new_username.strip()})")
+    else:
+        db.registrar_log(stored_username, "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
+        
+    return MessageResponse(ok=True, message="Credenciales de panel actualizadas correctamente")
 
 @app.get("/panel/auth/biometrics/challenge", tags=["Panel Auth"])
 def panel_biometrics_challenge():
@@ -971,8 +980,9 @@ def panel_biometrics_challenge():
 
 @app.post("/panel/auth/biometrics/register", response_model=MessageResponse, tags=["Panel Auth"])
 def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData = Depends(require_licencias_admin)):
-    if current.username != "panel_admin":
-        raise HTTPException(status_code=403, detail="Solo el panel_admin puede registrar biométricos")
+    stored_username = db.obtener_panel_username()
+    if current.username != stored_username:
+        raise HTTPException(status_code=403, detail="Solo el administrador del panel puede registrar biométricos")
         
     try:
         payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -983,7 +993,7 @@ def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData
         raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
         
     db.guardar_panel_biometric(body.credential_id, body.public_key_der, body.dispositivo_nombre)
-    db.registrar_log("panel_admin", "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
+    db.registrar_log(stored_username, "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
     return MessageResponse(ok=True, message="Dispositivo biométrico registrado exitosamente")
 
 @app.post("/panel/auth/biometrics/login", response_model=Token, tags=["Panel Auth"])
@@ -1012,21 +1022,22 @@ def panel_biometrics_login(request: Request, body: BiometricLoginRequest):
     if not valida:
         raise HTTPException(status_code=401, detail=f"Fallo biométrico: {motivo}")
         
+    stored_username = db.obtener_panel_username()
     token = create_token({
         "user_id":  999,
-        "username": "panel_admin",
+        "username": stored_username,
         "role":     "panel_admin",
         "matricula": None
     })
     
-    db.registrar_log("panel_admin", "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
+    db.registrar_log(stored_username, "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
     
     return Token(
         access_token=token,
         token_type="bearer",
         role="panel_admin",
         user_id=999,
-        username="panel_admin"
+        username=stored_username
     )
 
 @app.get("/panel/auth/biometrics/credentials", tags=["Panel Auth"])

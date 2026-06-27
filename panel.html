@@ -23,6 +23,10 @@
     padding:10px 12px; outline:none;
   }
   input:focus,select:focus{ border-color:var(--accent); }
+  input[type="checkbox"] {
+    width: 16px; height: 16px; min-height: 16px; padding: 0; margin: 0;
+    cursor: pointer; border-radius: 4px; display: inline-block; vertical-align: middle;
+  }
   button{ cursor:pointer; transition:background .15s, transform .05s; }
   button:active{ transform:scale(0.98); }
   .btn-primary{ background:var(--accent); border-color:var(--accent-d); color:#fff; font-weight:600; }
@@ -133,6 +137,9 @@
     <div class="field">
       <label>Contraseña</label>
       <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password" />
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:6px; cursor:pointer; color:var(--muted);">
+        <input type="checkbox" id="chkShowLoginPass" /> Mostrar contraseña
+      </label>
     </div>
     <button class="btn-primary" id="btnLogin">Ingresar</button>
     <button class="btn-ghost" id="btnBioLogin" style="margin-top:10px; width:100%; display:none; align-items:center; justify-content:center; gap:8px;">
@@ -239,7 +246,11 @@
 <!-- ============ MODAL: Cambiar contraseña del panel ============ -->
 <div class="modal-overlay" id="modalChangePassOverlay" style="display:none;">
   <div class="modal">
-    <h2>Cambiar Contraseña del Panel</h2>
+    <h2>Cambiar Credenciales del Panel</h2>
+    <div class="field">
+      <label>Nuevo nombre de usuario (opcional)</label>
+      <input id="fNewUsername" type="text" placeholder="Dejar en blanco para no cambiar" />
+    </div>
     <div class="field">
       <label>Contraseña actual del panel</label>
       <input id="fCurrentPass" type="password" placeholder="••••••••" />
@@ -251,11 +262,14 @@
     <div class="field">
       <label>Confirmar nueva contraseña</label>
       <input id="fConfirmPass" type="password" placeholder="••••••••" />
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:6px; cursor:pointer; color:var(--muted);">
+        <input type="checkbox" id="chkShowModalPass" /> Mostrar contraseñas
+      </label>
     </div>
     <div id="changePassError" style="color:var(--red); font-size:13px; margin-top:8px; display:none;"></div>
     <div class="modal-actions">
       <button class="btn-ghost" id="btnCancelChangePass">Cancelar</button>
-      <button class="btn-primary" id="btnConfirmChangePass">Actualizar Contraseña</button>
+      <button class="btn-primary" id="btnConfirmChangePass">Actualizar Credenciales</button>
     </div>
   </div>
 </div>
@@ -394,6 +408,17 @@ function cerrarSesion(){
 }
 $("btnLogout").addEventListener("click", cerrarSesion);
 
+$("chkShowLoginPass").addEventListener("change", function() {
+  $("loginPass").type = this.checked ? "text" : "password";
+});
+
+$("chkShowModalPass").addEventListener("change", function() {
+  const type = this.checked ? "text" : "password";
+  $("fCurrentPass").type = type;
+  $("fNewPass").type = type;
+  $("fConfirmPass").type = type;
+});
+
 function mostrarDashboard(){
   $("loginScreen").style.display = "none";
   $("dashboard").style.display = "block";
@@ -516,9 +541,14 @@ $("btnBioLogin").addEventListener("click", async () => {
 
 // MODAL: Cambiar contraseña
 $("btnChangePass").addEventListener("click", () => {
+  $("fNewUsername").value = "";
   $("fCurrentPass").value = "";
   $("fNewPass").value = "";
   $("fConfirmPass").value = "";
+  $("chkShowModalPass").checked = false;
+  $("fCurrentPass").type = "password";
+  $("fNewPass").type = "password";
+  $("fConfirmPass").type = "password";
   $("changePassError").style.display = "none";
   $("modalChangePassOverlay").style.display = "flex";
 });
@@ -528,6 +558,7 @@ $("btnCancelChangePass").addEventListener("click", () => {
 });
 
 $("btnConfirmChangePass").addEventListener("click", async () => {
+  const new_username = $("fNewUsername").value.trim();
   const current_password = $("fCurrentPass").value;
   const new_password = $("fNewPass").value;
   const confirm_password = $("fConfirmPass").value;
@@ -547,11 +578,23 @@ $("btnConfirmChangePass").addEventListener("click", async () => {
   }
 
   try {
+    const payload = { current_password, new_password };
+    if (new_username) {
+      payload.new_username = new_username;
+    }
     await apiFetch("/panel/auth/change-password", {
       method: "POST",
-      body: JSON.stringify({ current_password, new_password })
+      body: JSON.stringify(payload)
     });
-    showToast("Contraseña del panel actualizada con éxito.");
+    
+    if (new_username) {
+      USER.username = new_username;
+      sessionStorage.setItem("katrix_user", JSON.stringify(USER));
+      $("userInfo").textContent = `Conectado como ${USER.username} · ${API_BASE}`;
+      showToast("Usuario y contraseña del panel actualizados con éxito.");
+    } else {
+      showToast("Contraseña del panel actualizada con éxito.");
+    }
     $("modalChangePassOverlay").style.display = "none";
   } catch(e) {
     errBox.textContent = e.message;
@@ -587,13 +630,13 @@ $("btnConfirmBio").addEventListener("click", async () => {
     
     // 2. Registrar en hardware del cliente
     showToast("Colocá tu huella en el lector...");
-    const cred = await KatrixBiometrics.registerCredential("panel_admin", challengeRes.challenge);
+    const cred = await KatrixBiometrics.registerCredential(USER.username, challengeRes.challenge);
 
     // 3. Enviar registro al servidor
     await apiFetch("/panel/auth/biometrics/register", {
       method: "POST",
       body: JSON.stringify({
-        username: "panel_admin",
+        username: USER.username,
         credential_id: cred.credentialId,
         public_key_der: cred.publicKeyDer,
         dispositivo_nombre: dispositivo_nombre,

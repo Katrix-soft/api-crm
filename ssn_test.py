@@ -477,6 +477,11 @@ def inicializar_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hash_password("admin123")))
 
+    # Inicializar usuario por defecto del panel (panel_admin) si no existe
+    cursor.execute("SELECT COUNT(*) FROM panel_settings WHERE clave = 'username'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", "panel_admin"))
+
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
     except sqlite3.OperationalError:
@@ -3045,6 +3050,31 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         "producto": lic.get("producto", "CRM"),
         "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software")
     }
+
+
+def obtener_panel_username() -> str:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT valor FROM panel_settings WHERE clave = 'username'")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    # Si no existía, inicializar con panel_admin
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", "panel_admin"))
+    conn.commit()
+    conn.close()
+    return "panel_admin"
+
+
+def actualizar_panel_username(nuevo_user: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", nuevo_user))
+    conn.commit()
+    conn.close()
 
 
 def obtener_panel_password_hash() -> str:
