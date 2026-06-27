@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panel de Licencias — Katrix</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161922; --panel2:#1d212c; --border:#2a2f3a;
+    --text:#e7e9ee; --muted:#9aa3b2; --accent:#3b82f6; --accent-d:#2563eb;
+    --green:#22c55e; --green-bg:#13321f; --amber:#f59e0b; --amber-bg:#332a10;
+    --red:#ef4444; --red-bg:#331414; --gray:#6b7280; --gray-bg:#23262e;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+  }
+  input,select,button{
+    font-family:inherit; font-size:14px; border-radius:var(--radius);
+    border:1px solid var(--border); background:var(--panel2); color:var(--text);
+    padding:10px 12px; outline:none;
+  }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ cursor:pointer; transition:background .15s, transform .05s; }
+  button:active{ transform:scale(0.98); }
+  .btn-primary{ background:var(--accent); border-color:var(--accent-d); color:#fff; font-weight:600; }
+  .btn-primary:hover{ background:var(--accent-d); }
+  .btn-ghost:hover{ background:var(--panel); }
+  .btn-danger{ color:var(--red); border-color:var(--red); }
+  .btn-danger:hover{ background:var(--red-bg); }
+  .btn-warn{ color:var(--amber); border-color:var(--amber); }
+  .btn-warn:hover{ background:var(--amber-bg); }
+  .btn-ok{ color:var(--green); border-color:var(--green); }
+  .btn-ok:hover{ background:var(--green-bg); }
+
+  /* ---- Login ---- */
+  #loginScreen{
+    display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px;
+  }
+  .login-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:32px; width:100%; max-width:380px;
+  }
+  .login-card h1{ font-size:20px; margin:0 0 4px; }
+  .login-card p.sub{ color:var(--muted); font-size:13px; margin:0 0 24px; }
+  .login-card label{ font-size:13px; color:var(--muted); display:block; margin-bottom:6px; }
+  .login-card .field{ margin-bottom:14px; }
+  .login-card input{ width:100%; }
+  .login-card button{ width:100%; padding:12px; margin-top:6px; }
+  #loginError{
+    color:var(--red); font-size:13px; margin-top:12px; display:none;
+    background:var(--red-bg); padding:8px 10px; border-radius:8px;
+  }
+  .api-config{ margin-bottom:18px; }
+  .api-config input{ width:100%; font-size:12px; color:var(--muted); }
+
+  /* ---- Dashboard ---- */
+  #dashboard{ display:none; max-width:1100px; margin:0 auto; padding:20px; }
+  header.top{
+    display:flex; flex-wrap:wrap; gap:12px; justify-content:space-between; align-items:center;
+    margin-bottom:20px;
+  }
+  header.top h1{ font-size:20px; margin:0; }
+  header.top p{ margin:2px 0 0; color:var(--muted); font-size:13px; }
+  .stats{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr));
+    gap:12px; margin-bottom:20px;
+  }
+  .stat{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:14px; }
+  .stat .label{ font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .stat .value{ font-size:24px; font-weight:600; }
+
+  .toolbar{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+  .toolbar input[type=text]{ flex:1; min-width:180px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th{ text-align:left; padding:10px 8px; color:var(--muted); font-weight:500; border-bottom:1px solid var(--border); }
+  td{ padding:10px 8px; border-bottom:1px solid var(--border); vertical-align:middle; }
+  .table-wrap{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow-x:auto; padding:4px; }
+  .badge{ padding:4px 10px; border-radius:20px; font-size:12px; font-weight:600; display:inline-block; }
+  .badge-activa{ color:var(--green); background:var(--green-bg); }
+  .badge-suspendida{ color:var(--red); background:var(--red-bg); }
+  .badge-expirada{ color:var(--gray); background:var(--gray-bg); }
+  .row-actions{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .row-actions button{ padding:6px 10px; font-size:12px; }
+  .clave{ font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .empty{ text-align:center; color:var(--muted); padding:30px 0; }
+
+  /* ---- Modal ---- */
+  .modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6);
+    align-items:center; justify-content:center; padding:16px; z-index:50;
+  }
+  .modal{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:24px; width:100%; max-width:420px;
+  }
+  .modal h2{ margin:0 0 16px; font-size:17px; }
+  .modal .field{ margin-bottom:12px; }
+  .modal label{ font-size:12px; color:var(--muted); display:block; margin-bottom:5px; }
+  .modal input,.modal select{ width:100%; }
+  .modal-actions{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+  #toast{
+    position:fixed; bottom:20px; right:20px; background:var(--panel2);
+    border:1px solid var(--border); border-radius:10px; padding:12px 16px;
+    font-size:13px; display:none; z-index:60; max-width:320px;
+  }
+  @media (max-width:640px){
+    header.top{ flex-direction:column; align-items:flex-start; }
+    .row-actions{ justify-content:flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>Panel de Licencias</h1>
+    <p class="sub">Katrix ERP / CRM — acceso restringido a administradores</p>
+
+    <div class="api-config">
+      <label style="margin-bottom:6px;display:block;font-size:12px;color:var(--muted);">URL de la API</label>
+      <input id="apiBase" type="text" placeholder="https://tu-dominio.com" />
+    </div>
+
+    <div class="field">
+      <label>Usuario o email</label>
+      <input id="loginUser" type="text" placeholder="admin" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Contraseña</label>
+      <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+    <button class="btn-primary" id="btnLogin">Ingresar</button>
+    <div id="loginError"></div>
+  </div>
+</div>
+
+<!-- ============ DASHBOARD ============ -->
+<div id="dashboard">
+  <header class="top">
+    <div>
+      <h1>Licencias de software</h1>
+      <p id="userInfo"></p>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn-ghost" id="btnNueva"><span style="margin-right:6px;">+</span>Nueva licencia</button>
+      <button class="btn-ghost" id="btnLogout">Salir</button>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="label">Activas</div><div class="value" id="statActivas">0</div></div>
+    <div class="stat"><div class="label">Por vencer (15 días)</div><div class="value" id="statPorVencer">0</div></div>
+    <div class="stat"><div class="label">Suspendidas</div><div class="value" id="statSuspendidas">0</div></div>
+    <div class="stat"><div class="label">Total</div><div class="value" id="statTotal">0</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input type="text" id="buscar" placeholder="Buscar por cliente, email o clave..." />
+    <select id="filtroEstado">
+      <option value="todos">Todos los estados</option>
+      <option value="activa">Activa</option>
+      <option value="suspendida">Suspendida</option>
+      <option value="expirada">Expirada</option>
+    </select>
+    <select id="filtroProducto">
+      <option value="todos">Todos los productos</option>
+      <option value="CRM">CRM</option>
+      <option value="ERP">ERP</option>
+      <option value="POS">POS</option>
+    </select>
+    <button class="btn-ghost" id="btnRefrescar">Actualizar</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Cliente</th>
+          <th>Clave</th>
+          <th>Producto</th>
+          <th>Vence</th>
+          <th>Dispositivos</th>
+          <th>Estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tablaBody"></tbody>
+    </table>
+    <p class="empty" id="emptyMsg" style="display:none;">No se encontraron licencias.</p>
+  </div>
+</div>
+
+<!-- ============ MODAL: nueva / editar licencia ============ -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2 id="modalTitulo">Nueva licencia</h2>
+    <input type="hidden" id="fId" />
+    <div class="field">
+      <label>Cliente</label>
+      <input id="fCliente" type="text" placeholder="Nombre del cliente o empresa" />
+    </div>
+    <div class="field">
+      <label>Email del cliente</label>
+      <input id="fEmail" type="text" placeholder="cliente@empresa.com" />
+    </div>
+    <div class="field">
+      <label>Producto</label>
+      <select id="fProducto">
+        <option value="CRM">CRM</option>
+        <option value="ERP">ERP</option>
+        <option value="POS">POS</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Fecha de expiración</label>
+      <input id="fFecha" type="date" />
+    </div>
+    <div class="field">
+      <label>Límite de dispositivos</label>
+      <input id="fLimite" type="number" min="1" value="1" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btnCancelarModal">Cancelar</button>
+      <button class="btn-primary" id="btnGuardarModal">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ========================================================================
+   PANEL DE LICENCIAS — conectado a tu Katrix ERP API real
+   Endpoints usados (de tu api.py):
+     POST   /auth/login            { username, password }
+     GET    /licencias/            (requiere admin)
+     POST   /licencias/            (requiere admin)
+     PUT    /licencias/{id}        (requiere admin)
+     DELETE /licencias/{id}        (requiere admin)
+   ======================================================================== */
+
+let API_BASE = "";
+let TOKEN = "";
+let USER = null;
+let licencias = [];
+
+const $ = (id) => document.getElementById(id);
+
+function showToast(msg, isError){
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.borderColor = isError ? "var(--red)" : "var(--border)";
+  t.style.color = isError ? "var(--red)" : "var(--text)";
+  t.style.display = "block";
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=> t.style.display = "none", 3500);
+}
+
+async function apiFetch(path, options = {}){
+  const headers = Object.assign(
+    { "Content-Type": "application/json" },
+    options.headers || {}
+  );
+  if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+
+  const res = await fetch(API_BASE + path, Object.assign({}, options, { headers }));
+  if (res.status === 401){
+    showToast("Tu sesión expiró. Iniciá sesión de nuevo.", true);
+    cerrarSesion();
+    throw new Error("401");
+  }
+  if (!res.ok){
+    let detail = "Error " + res.status;
+    try { const j = await res.json(); detail = j.detail || detail; } catch(e){}
+    throw new Error(detail);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/* ---------------- LOGIN ---------------- */
+
+$("btnLogin").addEventListener("click", login);
+$("loginPass").addEventListener("keydown", (e)=>{ if(e.key === "Enter") login(); });
+
+async function login(){
+  const base = $("apiBase").value.trim().replace(/\/$/, "");
+  const username = $("loginUser").value.trim();
+  const password = $("loginPass").value;
+  const errBox = $("loginError");
+  errBox.style.display = "none";
+
+  if (!base || !username || !password){
+    errBox.textContent = "Completá la URL de la API, usuario y contraseña.";
+    errBox.style.display = "block";
+    return;
+  }
+  API_BASE = base;
+
+  try{
+    const res = await fetch(API_BASE + "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok){
+      const j = await res.json().catch(()=>({}));
+      throw new Error(j.detail || "Usuario o contraseña incorrectos");
+    }
+    const data = await res.json();
+    if (data.role !== "admin"){
+      throw new Error("Solo un usuario administrador puede gestionar licencias.");
+    }
+    TOKEN = data.access_token;
+    USER = data;
+    sessionStorage.setItem("katrix_token", TOKEN);
+    sessionStorage.setItem("katrix_api_base", API_BASE);
+    sessionStorage.setItem("katrix_user", JSON.stringify(USER));
+    mostrarDashboard();
+  }catch(err){
+    errBox.textContent = err.message;
+    errBox.style.display = "block";
+  }
+}
+
+function cerrarSesion(){
+  TOKEN = ""; USER = null;
+  sessionStorage.removeItem("katrix_token");
+  sessionStorage.removeItem("katrix_user");
+  $("dashboard").style.display = "none";
+  $("loginScreen").style.display = "flex";
+}
+$("btnLogout").addEventListener("click", cerrarSesion);
+
+function mostrarDashboard(){
+  $("loginScreen").style.display = "none";
+  $("dashboard").style.display = "block";
+  $("userInfo").textContent = `Conectado como ${USER.username} · ${API_BASE}`;
+  cargarLicencias();
+}
+
+/* Restaurar sesión si ya había una en esta pestaña */
+(function restaurar(){
+  const t = sessionStorage.getItem("katrix_token");
+  const u = sessionStorage.getItem("katrix_user");
+  const b = sessionStorage.getItem("katrix_api_base");
+  if (t && u && b){
+    TOKEN = t; USER = JSON.parse(u); API_BASE = b;
+    mostrarDashboard();
+  }
+})();
+
+/* ---------------- DATOS ---------------- */
+
+function diasRestantes(fechaISO){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const venc = new Date(fechaISO + "T00:00:00");
+  return Math.round((venc - hoy) / 86400000);
+}
+
+async function cargarLicencias(){
+  try{
+    licencias = await apiFetch("/licencias/");
+    render();
+  }catch(err){
+    if (err.message !== "401") showToast("No se pudieron cargar las licencias: " + err.message, true);
+  }
+}
+$("btnRefrescar").addEventListener("click", cargarLicencias);
+
+function render(){
+  const q = $("buscar").value.toLowerCase();
+  const fEstado = $("filtroEstado").value;
+  const fProducto = $("filtroProducto").value;
+
+  const filtradas = licencias.filter(l=>{
+    const matchQ = !q ||
+      (l.cliente||"").toLowerCase().includes(q) ||
+      (l.email_cliente||"").toLowerCase().includes(q) ||
+      (l.clave||"").toLowerCase().includes(q);
+    const matchE = fEstado === "todos" || l.estado === fEstado;
+    const matchP = fProducto === "todos" || l.producto === fProducto;
+    return matchQ && matchE && matchP;
+  });
+
+  $("statActivas").textContent = licencias.filter(l=>l.estado==="activa").length;
+  $("statPorVencer").textContent = licencias.filter(l=>l.estado==="activa" && diasRestantes(l.fecha_expiracion) <= 15 && diasRestantes(l.fecha_expiracion) >= 0).length;
+  $("statSuspendidas").textContent = licencias.filter(l=>l.estado==="suspendida").length;
+  $("statTotal").textContent = licencias.length;
+
+  const body = $("tablaBody");
+  body.innerHTML = "";
+  $("emptyMsg").style.display = filtradas.length ? "none" : "block";
+
+  filtradas.forEach(l=>{
+    const tr = document.createElement("tr");
+    const dias = diasRestantes(l.fecha_expiracion);
+    const venceTxt = new Date(l.fecha_expiracion + "T00:00:00").toLocaleDateString("es-AR");
+    const claseBadge = l.estado === "activa" ? "badge-activa" : (l.estado === "suspendida" ? "badge-suspendida" : "badge-expirada");
+    const labelEstado = l.estado === "activa" ? (dias < 0 ? "Vencida" : "Activa") : (l.estado === "suspendida" ? "Suspendida" : "Expirada");
+
+    tr.innerHTML = `
+      <td>
+        <div style="font-weight:600;">${l.cliente}</div>
+        <div style="font-size:12px; color:var(--muted);">${l.email_cliente || ""}</div>
+      </td>
+      <td class="clave">${l.clave}</td>
+      <td>${l.producto || "-"}</td>
+      <td>${venceTxt}${dias>=0 && dias<=15 ? ` <span style="color:var(--amber); font-size:11px;">(${dias}d)</span>` : ""}</td>
+      <td>${l.limite_dispositivos}</td>
+      <td><span class="badge ${claseBadge}">${labelEstado}</span></td>
+      <td>
+        <div class="row-actions">
+          ${l.estado !== "suspendida"
+            ? `<button class="btn-warn" data-action="suspender" data-id="${l.id}">Suspender</button>`
+            : `<button class="btn-ok" data-action="reactivar" data-id="${l.id}">Reactivar</button>`}
+          <button class="btn-ghost" data-action="editar" data-id="${l.id}">Editar</button>
+          <button class="btn-danger" data-action="eliminar" data-id="${l.id}">Eliminar</button>
+        </div>
+      </td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+$("buscar").addEventListener("input", render);
+$("filtroEstado").addEventListener("change", render);
+$("filtroProducto").addEventListener("change", render);
+
+/* ---------------- ACCIONES DE FILA ---------------- */
+
+$("tablaBody").addEventListener("click", async (e)=>{
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const id = Number(btn.dataset.id);
+  const accion = btn.dataset.action;
+  const lic = licencias.find(l=>l.id === id);
+  if (!lic) return;
+
+  if (accion === "editar"){
+    abrirModal(lic);
+    return;
+  }
+
+  if (accion === "eliminar"){
+    if (!confirm(`¿Eliminar definitivamente la licencia de "${lic.cliente}"? Esta acción no se puede deshacer.`)) return;
+    try{
+      await apiFetch(`/licencias/${id}`, { method: "DELETE" });
+      showToast("Licencia eliminada.");
+      cargarLicencias();
+    }catch(err){ showToast(err.message, true); }
+    return;
+  }
+
+  // suspender / reactivar -> PUT con todos los campos requeridos por LicenciaUpdate
+  const nuevoEstado = accion === "suspender" ? "suspendida" : "activa";
+  const motivo = accion === "suspender" ? prompt("Motivo de la suspensión (ej: falta de pago):", "falta_de_pago") : null;
+  if (accion === "suspender" && motivo === null) return; // canceló el prompt
+
+  try{
+    await apiFetch(`/licencias/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        cliente: lic.cliente,
+        fecha_expiracion: lic.fecha_expiracion,
+        estado: nuevoEstado,
+        limite_dispositivos: lic.limite_dispositivos,
+        dispositivo_id: lic.dispositivo_id || null,
+      }),
+    });
+    showToast(accion === "suspender" ? "Licencia suspendida." : "Licencia reactivada.");
+    cargarLicencias();
+  }catch(err){ showToast(err.message, true); }
+});
+
+/* ---------------- MODAL NUEVA / EDITAR ---------------- */
+
+$("btnNueva").addEventListener("click", ()=> abrirModal(null));
+$("btnCancelarModal").addEventListener("click", cerrarModal);
+
+function abrirModal(lic){
+  $("fId").value = lic ? lic.id : "";
+  $("fCliente").value = lic ? lic.cliente : "";
+  $("fEmail").value = lic ? (lic.email_cliente || "") : "";
+  $("fProducto").value = lic ? (lic.producto || "CRM") : "CRM";
+  $("fFecha").value = lic ? lic.fecha_expiracion : "";
+  $("fLimite").value = lic ? lic.limite_dispositivos : 1;
+  $("modalTitulo").textContent = lic ? "Editar licencia" : "Nueva licencia";
+  $("modalOverlay").style.display = "flex";
+}
+function cerrarModal(){ $("modalOverlay").style.display = "none"; }
+
+$("btnGuardarModal").addEventListener("click", async ()=>{
+  const id = $("fId").value;
+  const cliente = $("fCliente").value.trim();
+  const email = $("fEmail").value.trim();
+  const producto = $("fProducto").value;
+  const fecha = $("fFecha").value;
+  const limite = Number($("fLimite").value) || 1;
+
+  if (!cliente || !email || !fecha){
+    showToast("Completá cliente, email y fecha de expiración.", true);
+    return;
+  }
+
+  try{
+    if (id){
+      const lic = licencias.find(l=>l.id === Number(id));
+      await apiFetch(`/licencias/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          cliente, fecha_expiracion: fecha,
+          estado: lic ? lic.estado : "activa",
+          limite_dispositivos: limite,
+          dispositivo_id: lic ? lic.dispositivo_id || null : null,
+        }),
+      });
+      showToast("Licencia actualizada.");
+    } else {
+      const data = await apiFetch("/licencias/", {
+        method: "POST",
+        body: JSON.stringify({
+          cliente, email_cliente: email, producto,
+          fecha_expiracion: fecha, estado: "activa",
+          limite_dispositivos: limite,
+        }),
+      });
+      showToast(data.message || "Licencia creada.");
+    }
+    cerrarModal();
+    cargarLicencias();
+  }catch(err){ showToast(err.message, true); }
+});
+</script>
+</body>
+</html>

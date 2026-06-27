@@ -885,6 +885,20 @@ def health():
             "usuarios": ["/usuarios/"],
             "logs": ["/logs/"],
             "licencias": ["/licencias/validar", "/licencias/"],
+            "panel": ["/panel"],
         }
     }
+
+
+@app.get("/panel", tags=["Panel"])
+def get_panel_web():
+    """Sirve el panel de administración de licencias HTML."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base_dir, "panel.html")
+        with open(path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return Response(content=html, media_type="text/html")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al cargar el panel: {str(e)}")
 
