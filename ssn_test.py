@@ -88,9 +88,10 @@ class PostgresCursorWrapper:
         is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
         has_returning = "RETURNING" in translated_sql.upper()
 
+        sp_cursor = self.connection._conn.cursor()
         sp_active = False
         try:
-            self._cursor.execute("SAVEPOINT pg_exec_sp")
+            sp_cursor.execute("SAVEPOINT pg_exec_sp")
             sp_active = True
         except Exception:
             pass
@@ -106,7 +107,7 @@ class PostgresCursorWrapper:
                 except Exception:
                     if sp_active:
                         try:
-                            self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                            sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
                         except Exception:
                             pass
                     self._cursor.execute(translated_sql, params or ())
@@ -116,19 +117,24 @@ class PostgresCursorWrapper:
 
             if sp_active:
                 try:
-                    self._cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
+                    sp_cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
                 except Exception:
                     pass
         except Exception as e:
             if sp_active:
                 try:
-                    self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                    sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
                 except Exception:
                     pass
             err_str = str(e)
             if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
                 raise sqlite3.OperationalError(err_str)
             raise sqlite3.DatabaseError(err_str)
+        finally:
+            try:
+                sp_cursor.close()
+            except Exception:
+                pass
 
         return self
 
@@ -177,9 +183,10 @@ class PostgresCursorWrapper:
             elif "PANEL_SETTINGS" in translated_sql.upper():
                 translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
 
+        sp_cursor = self.connection._conn.cursor()
         sp_active = False
         try:
-            self._cursor.execute("SAVEPOINT pg_exec_sp")
+            sp_cursor.execute("SAVEPOINT pg_exec_sp")
             sp_active = True
         except Exception:
             pass
@@ -188,27 +195,29 @@ class PostgresCursorWrapper:
             self._cursor.executemany(translated_sql, seq_of_parameters)
             if sp_active:
                 try:
-                    self._cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
+                    sp_cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
                 except Exception:
                     pass
         except Exception as e:
             if sp_active:
                 try:
-                    self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                    sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
                 except Exception:
                     pass
             err_str = str(e)
             if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
                 raise sqlite3.OperationalError(err_str)
             raise sqlite3.DatabaseError(err_str)
+        finally:
+            try:
+                sp_cursor.close()
+            except Exception:
+                pass
 
         return self
 
     def fetchone(self):
-        try:
-            row = self._cursor.fetchone()
-        except Exception:
-            return None
+        row = self._cursor.fetchone()
         if row is None:
             return None
         keys = [desc[0] for desc in self._cursor.description]
@@ -217,9 +226,8 @@ class PostgresCursorWrapper:
         return row
 
     def fetchall(self):
-        try:
-            rows = self._cursor.fetchall()
-        except Exception:
+        rows = self._cursor.fetchall()
+        if not rows:
             return []
         keys = [desc[0] for desc in self._cursor.description]
         if self._row_factory or getattr(self.connection, 'row_factory', None):
