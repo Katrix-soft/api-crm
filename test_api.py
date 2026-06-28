@@ -12,6 +12,11 @@ import argparse
 import requests
 from datetime import datetime
 
+# Agregar la ruta de .venv al final de sys.path para que use slowapi de allí sin sobreescribir typing_extensions u otros paquetes más nuevos del sistema.
+venv_site = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".venv", "lib", "python3.13", "site-packages"))
+if venv_site not in sys.path:
+    sys.path.append(venv_site)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Configuración de Aislamiento para Tests Unitarios
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +109,7 @@ class KatrixAPITestCase(unittest.TestCase):
 
     def test_04_login_incorrecto(self):
         """Verificar que las credenciales incorrectas retornen error."""
-        response = self.client.post("/auth/login", data={
+        response = self.client.post("/auth/login", json={
             "username": "broker",
             "password": "wrongpassword"
         })
@@ -112,7 +117,7 @@ class KatrixAPITestCase(unittest.TestCase):
 
     def test_05_login_exitoso_y_perfil(self):
         """Verificar login del admin por defecto y obtención de perfil."""
-        response = self.client.post("/auth/login", data={
+        response = self.client.post("/auth/login", json={
             "username": "broker",
             "password": "password123"
         })
@@ -126,19 +131,20 @@ class KatrixAPITestCase(unittest.TestCase):
         response_me = self.client.get("/auth/me", headers=headers)
         self.assertEqual(response_me.status_code, 200)
         user_data = response_me.json()
-        self.assertEqual(user_data["usuario"], "broker")
-        self.assertEqual(user_data["rol"], "admin")
+        self.assertEqual(user_data["username"], "broker")
+        self.assertEqual(user_data["role"], "admin")
 
     def test_06_crud_licencias_admin(self):
         """Verificar la creación, listado, edición y eliminación de licencias (Admin)."""
         # 1. Login Admin
-        login_res = self.client.post("/auth/login", data={"username": "broker", "password": "password123"})
+        login_res = self.client.post("/auth/login", json={"username": "broker", "password": "password123"})
         token = login_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         # 2. Crear nueva licencia
         payload = {
             "cliente": "Nuevo Cliente Comercial",
+            "email_cliente": "nuevo@cliente.com",
             "fecha_expiracion": "2027-12-31",
             "estado": "activa",
             "limite_dispositivos": 5
@@ -195,6 +201,46 @@ class KatrixAPITestCase(unittest.TestCase):
         })
         self.assertFalse(res_val_del.json()["valid"])
         self.assertEqual(res_val_del.json()["message"], "Clave de licencia inexistente")
+
+    def test_07_panel_sessions_and_logs(self):
+        """Verificar endpoints de sesiones del panel y logs de auditoría."""
+        # 1. Login kadmin (Superadmin)
+        login_res = self.client.post("/panel/auth/login", json={"username": "kadmin", "password": "Katrix2026$"})
+        self.assertEqual(login_res.status_code, 200)
+        token = login_res.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 2. Consultar sesiones
+        res_sess = self.client.get("/panel/sessions", headers=headers)
+        self.assertEqual(res_sess.status_code, 200)
+        sessions = res_sess.json()
+        self.assertTrue(any(s["username"] == "kadmin" for s in sessions))
+
+        # 3. Consultar logs
+        res_logs = self.client.get("/panel/logs", headers=headers)
+        self.assertEqual(res_logs.status_code, 200)
+        logs = res_logs.json()
+        self.assertTrue(len(logs) > 0)
+
+        # 4. Login nicodev (Admin) y verificar que tiene sesión registrada
+        login_nico = self.client.post("/panel/auth/login", json={"username": "nicodev", "password": "nicodev"})
+        self.assertEqual(login_nico.status_code, 200)
+        nico_token = login_nico.json()["access_token"]
+        nico_headers = {"Authorization": f"Bearer {nico_token}"}
+
+        # Verificar nico puede consultar su perfil
+        res_me = self.client.get("/auth/me", headers=nico_headers)
+        self.assertEqual(res_me.status_code, 200)
+
+        # 5. Revocar nicodev por kadmin
+        res_revoke = self.client.post("/panel/sessions/nicodev/revoke", json={}, headers=headers)
+        self.assertEqual(res_revoke.status_code, 200)
+        self.assertTrue(res_revoke.json()["ok"])
+
+        # 6. Consultar perfil con nicodev token de nuevo (debería ser rechazado por sesión revocada)
+        res_me_revoked = self.client.get("/auth/me", headers=nico_headers)
+        self.assertEqual(res_me_revoked.status_code, 401)
+        self.assertIn("revocada", res_me_revoked.json()["detail"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -255,7 +301,7 @@ def run_live_cli(base_url):
             user = input("Usuario: ").strip() or "broker"
             password = input("Contraseña: ").strip() or "password123"
             try:
-                r = session.post(f"{base_url}/auth/login", data={"username": user, "password": password})
+                r = session.post(f"{base_url}/auth/login", json={"username": user, "password": password})
                 if r.status_code == 200:
                     token = r.json()["access_token"]
                     session.headers.update({"Authorization": f"Bearer {token}"})

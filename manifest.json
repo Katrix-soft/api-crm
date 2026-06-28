@@ -1,0 +1,21 @@
+{
+  "short_name": "Katrix Licencias",
+  "name": "Katrix Panel de Licencias",
+  "icons": [
+    {
+      "src": "/panel/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/panel/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/panel",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

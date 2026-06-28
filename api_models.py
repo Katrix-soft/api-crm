@@ -18,6 +18,7 @@ class Token(BaseModel):
     role: str
     user_id: int
     username: str
+    permissions: Optional[dict] = None
 
 class TokenData(BaseModel):
     user_id: int
@@ -384,6 +385,7 @@ class LicenciaUpdate(BaseModel):
     limite_dispositivos: int
     dispositivo_id: Optional[str] = None
     motivo: Optional[str] = None
+    dispositivos_info: Optional[str] = None
 
 class LicenciaResponse(BaseModel):
     id: int

@@ -4,6 +4,9 @@ FastAPI + JWT. Admin: CRUD completo. Agente: solo lectura.
 Arrancar con: uvicorn api:app --host 0.0.0.0 --port 8000
 """
 import os, sys
+venv_site = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".venv", "lib", "python3.13", "site-packages"))
+if venv_site not in sys.path:
+    sys.path.append(venv_site)
 from datetime import datetime, timedelta
 from typing import Optional, List
 
@@ -12,7 +15,11 @@ from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from jose import JWTError, jwt
+try:
+    from jose import JWTError, jwt
+except ImportError:
+    import jwt
+    from jwt import PyJWTError as JWTError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -45,6 +52,22 @@ class BiometricLoginRequest(BaseModel):
     authenticator_data: str
     client_data_json: str
     challenge_token: str
+
+class PanelUserCreate(BaseModel):
+    username: str
+    password: str
+    role: str
+    permissions: dict
+
+class PanelUserUpdate(BaseModel):
+    password: Optional[str] = None
+    role: Optional[str] = None
+    permissions: Optional[dict] = None
+
+class PanelUserResponse(BaseModel):
+    username: str
+    role: str
+    permissions: dict
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 SECRET_KEY  = os.getenv("KATRIX_SECRET_KEY", "cambia-esta-clave-en-produccion-2026")
@@ -98,6 +121,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+# ─── Panel Sessions tracking in memory ────────────────────────────────────────
+PANEL_SESSIONS = {}
+REVOKED_SESSIONS = set()
+
 # ─── JWT Helpers ─────────────────────────────────────────────────────────────
 
 def create_token(data: dict) -> str:
@@ -106,7 +133,7 @@ def create_token(data: dict) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
+def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> TokenData:
     cred_err = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Token inválido o expirado",
@@ -120,6 +147,28 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
         matricula: str = payload.get("matricula")
         if user_id is None or username is None:
             raise cred_err
+            
+        # Validar y registrar sesión si es usuario del panel de licencias
+        if role in ["panel_admin", "panel_superadmin", "admin"]:
+            if username in REVOKED_SESSIONS:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Tu sesión ha sido revocada por un administrador.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            # Registrar/actualizar la actividad en línea
+            client_host = request.client.host if request.client else "Desconocida"
+            user_agent = request.headers.get("user-agent", "Desconocido")
+            PANEL_SESSIONS[username] = {
+                "username": username,
+                "role": role,
+                "ip": client_host,
+                "user_agent": user_agent,
+                "last_active": datetime.utcnow().isoformat(),
+                "status": "online"
+            }
+            
         return TokenData(user_id=user_id, username=username, role=role, matricula=matricula)
     except JWTError:
         raise cred_err
@@ -132,17 +181,42 @@ def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
 
 
 def require_licencias_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
-    if current.role not in ["admin", "panel_admin"]:
+    if current.role not in ["admin", "panel_admin", "panel_superadmin"]:
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador de licencias o administrador general")
-    if current.role == "panel_admin":
-        stored_username = db.obtener_panel_username()
-        if current.username != stored_username:
+    if current.role in ["panel_admin", "panel_superadmin"]:
+        user = db.obtener_panel_user(current.username)
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Sesión expirada por cambio de credenciales",
+                detail="Usuario de panel inexistente o eliminado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
     return current
+
+
+def check_panel_permission(username: str, role: str, permission: str):
+    if role == "admin":
+        return True  # El admin general del CRM siempre tiene todos los permisos
+    
+    user = db.obtener_panel_user(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario de panel inexistente")
+    
+    if user["role"] == "superadmin":
+        return True  # El superadmin de panel tiene todos los permisos
+        
+    import json
+    try:
+        perms = json.loads(user["permissions"])
+    except Exception:
+        perms = {}
+        
+    if not perms.get(permission, False):
+        raise HTTPException(
+            status_code=403,
+            detail=f"No tenés permiso para realizar esta acción: {permission}"
+        )
+    return True
 
 
 # ─── AUTH ────────────────────────────────────────────────────────────────────
@@ -842,19 +916,32 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
     """
     Valida la clave de licencia provista con la huella digital del hardware del cliente.
     """
-    res = db.validar_licencia(body.clave, body.dispositivo_id, body.email_cliente, body.dispositivo_nombre)
+    ip = request.client.host if request.client else "Desconocida"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+        
+    res = db.validar_licencia(
+        body.clave, 
+        body.dispositivo_id, 
+        body.email_cliente, 
+        body.dispositivo_nombre,
+        ip_address=ip
+    )
     return LicenciaValidarResponse(**res)
 
 
 @app.get("/licencias/", response_model=List[LicenciaResponse], tags=["Licencias de Software"])
 def api_list_licencias(current: TokenData = Depends(require_licencias_admin)):
     """Lista todas las licencias del sistema. Solo admin de licencias."""
+    check_panel_permission(current.username, current.role, "ver_licencias")
     lics = db.obtener_licencias()
     return [LicenciaResponse(**l) for l in lics]
 
 
 @app.post("/licencias/", response_model=MessageResponse, tags=["Licencias de Software"])
 def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_licencias_admin)):
+    check_panel_permission(current.username, current.role, "crear_licencia")
     producto = body.producto.upper()
     if producto not in ["CRM", "ERP", "POS"]:
         raise HTTPException(status_code=400, detail=f"Producto inválido. Opciones: CRM, ERP, POS")
@@ -877,6 +964,18 @@ def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(requi
 @app.put("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
 def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = Depends(require_licencias_admin)):
     """Actualiza los datos de una licencia. Solo admin."""
+    lic_previa = db.obtener_licencia_por_id(lic_id)
+    if not lic_previa:
+        raise HTTPException(status_code=404, detail="Licencia no encontrada")
+        
+    # Validar permisos detalladamente
+    if body.dispositivo_id != lic_previa.get("dispositivo_id") or body.dispositivos_info != lic_previa.get("dispositivos_info"):
+        check_panel_permission(current.username, current.role, "desvincular_dispositivo")
+    if body.estado != lic_previa.get("estado"):
+        check_panel_permission(current.username, current.role, "suspender_licencia")
+    if body.cliente != lic_previa.get("cliente") or body.fecha_expiracion != lic_previa.get("fecha_expiracion") or body.limite_dispositivos != lic_previa.get("limite_dispositivos"):
+        check_panel_permission(current.username, current.role, "editar_licencia")
+        
     ok = db.actualizar_licencia(
         licencia_id=lic_id,
         cliente=body.cliente,
@@ -884,21 +983,61 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
         estado=body.estado,
         limite_dispositivos=body.limite_dispositivos,
         dispositivo_id=body.dispositivo_id,
-        motivo=body.motivo
+        motivo=body.motivo,
+        dispositivos_info=body.dispositivos_info
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")
+        
     db.registrar_log(current.username, "API_UPDATE_LICENCIA", f"ID {lic_id} actualizada")
+    
+    # Enviar correo si pasa a suspendida
+    if body.estado == "suspendida" and lic_previa.get("estado") != "suspendida":
+        import threading
+        def alert_suspension():
+            db.enviar_mail_alerta_licencia(
+                destinatario="supit@katrix.com.ar",
+                cliente=body.cliente,
+                email_cliente=lic_previa.get("email_cliente") or "",
+                clave=lic_previa.get("clave") or "",
+                accion="SUSPENDIDA",
+                motivo=body.motivo,
+                dispositivo_id=lic_previa.get("dispositivo_id") or body.dispositivo_id,
+                dispositivos_info=lic_previa.get("dispositivos_info") or body.dispositivos_info
+            )
+        threading.Thread(target=alert_suspension, daemon=True).start()
+        
     return MessageResponse(ok=True, message="Licencia actualizada")
 
 
 @app.delete("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
 def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
     """Elimina una licencia. Solo admin."""
+    check_panel_permission(current.username, current.role, "eliminar_licencia")
+    lic_previa = db.obtener_licencia_por_id(lic_id)
+    if not lic_previa:
+        raise HTTPException(status_code=404, detail="Licencia no encontrada")
+        
     ok = db.eliminar_licencia(lic_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")
+        
     db.registrar_log(current.username, "API_DELETE_LICENCIA", f"ID {lic_id} eliminada")
+    
+    # Enviar correo de eliminación
+    import threading
+    def alert_deletion():
+        db.enviar_mail_alerta_licencia(
+            destinatario="supit@katrix.com.ar",
+            cliente=lic_previa.get("cliente") or "",
+            email_cliente=lic_previa.get("email_cliente") or "",
+            clave=lic_previa.get("clave") or "",
+            accion="ELIMINADA",
+            dispositivo_id=lic_previa.get("dispositivo_id"),
+            dispositivos_info=lic_previa.get("dispositivos_info")
+        )
+    threading.Thread(target=alert_deletion, daemon=True).start()
+    
     return MessageResponse(ok=True, message="Licencia eliminada")
 
 
@@ -928,55 +1067,69 @@ def get_katrix_biometrics_js():
 @app.post("/panel/auth/login", response_model=Token, tags=["Panel Auth"])
 @limiter.limit("5/minute")
 def panel_login(request: Request, body: PanelLoginRequest):
-    stored_username = db.obtener_panel_username()
-    if body.username != stored_username:
+    user = db.obtener_panel_user(body.username)
+    if not user:
         raise HTTPException(status_code=401, detail="Usuario de panel incorrecto")
         
-    stored_hash = db.obtener_panel_password_hash()
-    if not db.verify_password(stored_hash, body.password):
+    if not db.verify_password(user["password_hash"], body.password):
         raise HTTPException(status_code=401, detail="Contraseña de panel incorrecta")
         
+    role_token = "panel_superadmin" if user["role"] == "superadmin" else "panel_admin"
+    
+    import json
+    try:
+        perms = json.loads(user["permissions"])
+    except Exception:
+        perms = {}
+        
     token = create_token({
-        "user_id":  999,
-        "username": stored_username,
-        "role":     "panel_admin",
+        "user_id": 999,
+        "username": user["username"],
+        "role": role_token,
         "matricula": None
     })
     
-    db.registrar_log(stored_username, "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
+    db.registrar_log(user["username"], "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
+    
+    # Registrar la sesión activa y eliminar de la lista de revocadas
+    REVOKED_SESSIONS.discard(user["username"])
+    client_host = request.client.host if request.client else "Desconocida"
+    user_agent = request.headers.get("user-agent", "Desconocido")
+    PANEL_SESSIONS[user["username"]] = {
+        "username": user["username"],
+        "role": role_token,
+        "ip": client_host,
+        "user_agent": user_agent,
+        "last_active": datetime.utcnow().isoformat(),
+        "status": "online"
+    }
     
     return Token(
         access_token=token,
         token_type="bearer",
-        role="panel_admin",
+        role=role_token,
         user_id=999,
-        username=stored_username
+        username=user["username"],
+        permissions=perms
     )
 
 @app.post("/panel/auth/change-password", response_model=MessageResponse, tags=["Panel Auth"])
 def panel_change_password(body: PanelChangePasswordRequest, current: TokenData = Depends(require_licencias_admin)):
-    stored_username = db.obtener_panel_username()
-    if current.username != stored_username:
-        raise HTTPException(status_code=403, detail="Solo el administrador del panel puede cambiar estas credenciales")
+    user = db.obtener_panel_user(current.username)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
         
-    stored_hash = db.obtener_panel_password_hash()
-    if not db.verify_password(stored_hash, body.current_password):
+    if not db.verify_password(user["password_hash"], body.current_password):
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
         
-    db.actualizar_panel_password(body.new_password)
+    db.actualizar_panel_user(user["username"], body.new_password, user["role"], user["permissions"])
+    db.registrar_log(user["username"], "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
     
-    if body.new_username and body.new_username.strip():
-        db.actualizar_panel_username(body.new_username.strip())
-        db.registrar_log(body.new_username.strip(), "PANEL_CHANGE_USER_PASS", f"Cambio de usuario y contraseña del panel (De {stored_username} a {body.new_username.strip()})")
-    else:
-        db.registrar_log(stored_username, "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
-        
-    return MessageResponse(ok=True, message="Credenciales de panel actualizadas correctamente")
+    return MessageResponse(ok=True, message="Contraseña de panel actualizada correctamente")
 
 @app.get("/panel/auth/biometrics/challenge", tags=["Panel Auth"])
 def panel_biometrics_challenge():
     challenge = katrix_biometrics.generar_challenge()
-    # Generar un token temporal firmado que expira en 2 minutos para evitar mantener estado en el servidor
     challenge_token = jwt.encode(
         {
             "challenge": challenge, 
@@ -989,10 +1142,6 @@ def panel_biometrics_challenge():
 
 @app.post("/panel/auth/biometrics/register", response_model=MessageResponse, tags=["Panel Auth"])
 def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData = Depends(require_licencias_admin)):
-    stored_username = db.obtener_panel_username()
-    if current.username != stored_username:
-        raise HTTPException(status_code=403, detail="Solo el administrador del panel puede registrar biométricos")
-        
     try:
         payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
         challenge = payload.get("challenge")
@@ -1001,8 +1150,8 @@ def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData
     except JWTError:
         raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
         
-    db.guardar_panel_biometric(body.credential_id, body.public_key_der, body.dispositivo_nombre)
-    db.registrar_log(stored_username, "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
+    db.guardar_panel_biometric(body.credential_id, body.public_key_der, body.dispositivo_nombre, current.username)
+    db.registrar_log(current.username, "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
     return MessageResponse(ok=True, message="Dispositivo biométrico registrado exitosamente")
 
 @app.post("/panel/auth/biometrics/login", response_model=Token, tags=["Panel Auth"])
@@ -1031,28 +1180,223 @@ def panel_biometrics_login(request: Request, body: BiometricLoginRequest):
     if not valida:
         raise HTTPException(status_code=401, detail=f"Fallo biométrico: {motivo}")
         
-    stored_username = db.obtener_panel_username()
+    username = cred["username"]
+    user = db.obtener_panel_user(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="El usuario asociado a este biométrico ya no existe")
+        
+    role_token = "panel_superadmin" if user["role"] == "superadmin" else "panel_admin"
+    
+    import json
+    try:
+        perms = json.loads(user["permissions"])
+    except Exception:
+        perms = {}
+        
     token = create_token({
-        "user_id":  999,
-        "username": stored_username,
-        "role":     "panel_admin",
+        "user_id": 999,
+        "username": username,
+        "role": role_token,
         "matricula": None
     })
     
-    db.registrar_log(stored_username, "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
+    db.registrar_log(username, "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
+    
+    # Registrar la sesión activa y eliminar de la lista de revocadas
+    REVOKED_SESSIONS.discard(username)
+    client_host = request.client.host if request.client else "Desconocida"
+    user_agent = request.headers.get("user-agent", "Desconocido")
+    PANEL_SESSIONS[username] = {
+        "username": username,
+        "role": role_token,
+        "ip": client_host,
+        "user_agent": user_agent,
+        "last_active": datetime.utcnow().isoformat(),
+        "status": "online"
+    }
     
     return Token(
         access_token=token,
         token_type="bearer",
-        role="panel_admin",
+        role=role_token,
         user_id=999,
-        username=stored_username
+        username=username,
+        permissions=perms
     )
 
 @app.get("/panel/auth/biometrics/credentials", tags=["Panel Auth"])
 def panel_biometrics_credentials():
     creds = db.obtener_todos_panel_biometrics()
     return [c["credential_id"] for c in creds]
+
+# ─── PANEL USER MANAGEMENT (SUPERADMIN ONLY) ───────────────────────────────────
+
+def require_panel_superadmin(current: TokenData = Depends(require_licencias_admin)):
+    if current.role == "admin":
+        return current  # El admin general del CRM siempre tiene rol de superadmin
+    user = db.obtener_panel_user(current.username)
+    if user and user["role"] == "superadmin":
+        return current
+    raise HTTPException(status_code=403, detail="Se requieren permisos de Superadmin del Panel")
+
+@app.get("/panel/users", response_model=List[PanelUserResponse], tags=["Panel Users"])
+def panel_list_users(current: TokenData = Depends(require_panel_superadmin)):
+    users = db.obtener_todos_panel_users()
+    res = []
+    import json
+    for u in users:
+        try:
+            perms = json.loads(u["permissions"])
+        except Exception:
+            perms = {}
+        res.append(PanelUserResponse(
+            username=u["username"],
+            role=u["role"],
+            permissions=perms
+        ))
+    return res
+
+@app.post("/panel/users", response_model=MessageResponse, tags=["Panel Users"])
+def panel_create_user(body: PanelUserCreate, current: TokenData = Depends(require_panel_superadmin)):
+    if len(body.username.strip()) < 3:
+        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
+    if len(body.password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 4 caracteres")
+        
+    existing = db.obtener_panel_user(body.username)
+    if existing:
+        raise HTTPException(status_code=400, detail="El usuario ya existe")
+        
+    import json
+    perms_str = json.dumps(body.permissions)
+    ok = db.crear_panel_user(body.username, body.password, body.role, perms_str)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Error al crear el usuario")
+        
+    db.registrar_log(current.username, "PANEL_USER_CREATE", f"Creó el usuario de panel: {body.username} (rol: {body.role})")
+    return MessageResponse(ok=True, message="Usuario creado exitosamente")
+
+@app.put("/panel/users/{username}", response_model=MessageResponse, tags=["Panel Users"])
+def panel_update_user(username: str, body: PanelUserUpdate, current: TokenData = Depends(require_panel_superadmin)):
+    existing = db.obtener_panel_user(username)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+    if existing["role"] == "superadmin" and body.role == "admin":
+        superadmins = [u for u in db.obtener_todos_panel_users() if u["role"] == "superadmin"]
+        if len(superadmins) <= 1:
+            raise HTTPException(status_code=400, detail="Debe haber al menos un superadmin en el sistema")
+            
+    role = body.role if body.role else existing["role"]
+    
+    import json
+    if body.permissions is not None:
+        perms_str = json.dumps(body.permissions)
+    else:
+        perms_str = existing["permissions"]
+        
+    ok = db.actualizar_panel_user(username, body.password, role, perms_str)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Error al actualizar el usuario")
+        
+    db.registrar_log(current.username, "PANEL_USER_UPDATE", f"Actualizó el usuario de panel: {username}")
+    return MessageResponse(ok=True, message="Usuario actualizado exitosamente")
+
+@app.delete("/panel/users/{username}", response_model=MessageResponse, tags=["Panel Users"])
+def panel_delete_user(username: str, current: TokenData = Depends(require_panel_superadmin)):
+    if username == current.username:
+        raise HTTPException(status_code=400, detail="No podés eliminar a tu propio usuario")
+        
+    existing = db.obtener_panel_user(username)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+    if existing["role"] == "superadmin":
+        superadmins = [u for u in db.obtener_todos_panel_users() if u["role"] == "superadmin"]
+        if len(superadmins) <= 1:
+            raise HTTPException(status_code=400, detail="Debe haber al menos un superadmin en el sistema")
+            
+    ok = db.eliminar_panel_user(username)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Error al eliminar el usuario")
+        
+    db.registrar_log(current.username, "PANEL_USER_DELETE", f"Eliminó el usuario de panel: {username}")
+    return MessageResponse(ok=True, message="Usuario eliminado exitosamente")
+
+# ─── PANEL ACTIVE SESSIONS & AUDIT LOGS ───────────────────────────────────────
+
+@app.get("/panel/sessions", tags=["Panel Sessions"])
+def panel_list_sessions(current: TokenData = Depends(require_licencias_admin)):
+    # Lazy cleanup of old sessions (inactive for more than 12 hours)
+    now = datetime.utcnow()
+    for u, s in list(PANEL_SESSIONS.items()):
+        try:
+            last_act = datetime.fromisoformat(s["last_active"])
+            if now - last_act > timedelta(hours=12):
+                PANEL_SESSIONS.pop(u, None)
+        except Exception:
+            PANEL_SESSIONS.pop(u, None)
+
+    if current.role not in ["panel_superadmin", "admin"]:
+        check_panel_permission(current.username, current.role, "ver_sesiones")
+
+    return list(PANEL_SESSIONS.values())
+
+@app.post("/panel/sessions/{username}/revoke", response_model=MessageResponse, tags=["Panel Sessions"])
+def panel_revoke_session(username: str, current: TokenData = Depends(require_licencias_admin)):
+    if username == current.username:
+        raise HTTPException(status_code=400, detail="No podés revocar tu propia sesión activa")
+        
+    if current.role not in ["panel_superadmin", "admin"]:
+        check_panel_permission(current.username, current.role, "desvincular_sesion")
+        
+    # Revocar sesión
+    PANEL_SESSIONS.pop(username, None)
+    REVOKED_SESSIONS.add(username)
+    
+    db.registrar_log(current.username, "PANEL_SESSION_REVOKE", f"Forzó cierre de sesión para usuario: {username}")
+    return MessageResponse(ok=True, message=f"Sesión del usuario '{username}' revocada exitosamente")
+
+@app.get("/panel/logs", tags=["Panel Logs"])
+def panel_list_logs(
+    limite: int = Query(100, ge=1, le=500, description="Cantidad máxima de logs a retornar"),
+    current: TokenData = Depends(require_licencias_admin)
+):
+    if current.role not in ["panel_superadmin", "admin"]:
+        check_panel_permission(current.username, current.role, "ver_logs")
+        
+    logs = db.obtener_logs(limite=limite)
+    return logs
+
+# ─── PWA STATIC ASSETS ──────────────────────────────────────────────────────────
+
+@app.get("/panel/manifest.json", tags=["Panel"])
+def get_manifest():
+    manifest_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifest.json")
+    if not os.path.exists(manifest_path):
+        raise HTTPException(status_code=404, detail="manifest.json no encontrado")
+    return FileResponse(manifest_path, media_type="application/json")
+
+@app.get("/panel/sw.js", tags=["Panel"])
+def get_sw():
+    sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sw.js")
+    if not os.path.exists(sw_path):
+        raise HTTPException(status_code=404, detail="sw.js no encontrado")
+    return FileResponse(sw_path, media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+@app.get("/panel/icon-192.png", tags=["Panel"])
+def get_icon_192():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon-192.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="icon-192.png no encontrado")
+    return FileResponse(path, media_type="image/png")
+
+@app.get("/panel/icon-512.png", tags=["Panel"])
+def get_icon_512():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon-512.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="icon-512.png no encontrado")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/health", tags=["Sistema"])

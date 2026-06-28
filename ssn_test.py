@@ -468,7 +468,23 @@ def inicializar_db():
             credential_id TEXT PRIMARY KEY,
             public_key TEXT NOT NULL,
             dispositivo_nombre TEXT,
+            username TEXT,
             creado_en TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    
+    # Asegurar columna username en panel_biometrics si ya existía la tabla
+    try:
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS panel_users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            permissions TEXT NOT NULL
         )
     """)
     
@@ -481,6 +497,27 @@ def inicializar_db():
     cursor.execute("SELECT COUNT(*) FROM panel_settings WHERE clave = 'username'")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", "panel_admin"))
+
+    # Sembrar usuarios kadmin (superadmin) y nicodev (admin) si no existen
+    cursor.execute("SELECT COUNT(*) FROM panel_users WHERE username = 'kadmin'")
+    if cursor.fetchone()[0] == 0:
+        kadmin_pass = os.environ.get("KATRIX_KADMIN_PASSWORD", "Katrix2026$")
+        hashed_kadmin = hash_password(kadmin_pass)
+        kadmin_perms = '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":true,"eliminar_licencia":true,"ver_dispositivos":true,"desvincular_dispositivo":true,"ver_sesiones":true,"desvincular_sesion":true,"ver_logs":true}'
+        cursor.execute("""
+            INSERT INTO panel_users (username, password_hash, role, permissions)
+            VALUES (?, ?, ?, ?)
+        """, ("kadmin", hashed_kadmin, "superadmin", kadmin_perms))
+
+    cursor.execute("SELECT COUNT(*) FROM panel_users WHERE username = 'nicodev'")
+    if cursor.fetchone()[0] == 0:
+        nicodev_pass = os.environ.get("KATRIX_NICODEV_PASSWORD", "nicodev")
+        hashed_nicodev = hash_password(nicodev_pass)
+        nicodev_perms = '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":false,"eliminar_licencia":false,"ver_dispositivos":true,"desvincular_dispositivo":false,"ver_sesiones":true,"desvincular_sesion":false,"ver_logs":true}'
+        cursor.execute("""
+            INSERT INTO panel_users (username, password_hash, role, permissions)
+            VALUES (?, ?, ?, ?)
+        """, ("nicodev", hashed_nicodev, "admin", nicodev_perms))
 
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
@@ -1271,6 +1308,62 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
         return True
     except Exception as e:
         print(f"Error al enviar correo por SMTP: {e}")
+        return False
+
+
+def enviar_mail_alerta_licencia(destinatario: str, cliente: str, email_cliente: str, clave: str, accion: str, motivo: str = None, dispositivo_id: str = None, dispositivos_info: str = None) -> bool:
+    smtp_address = "mail.arkhon.com.ar"
+    smtp_port = 587
+    sender_email = "no-reply@katrix.com.ar"
+    sender_name = "Alerta de Seguridad - Katrix"
+    smtp_username = "no-reply@katrix.com.ar"
+    smtp_password = "Nachax5$"
+    
+    msg = MIMEMultipart()
+    msg['From'] = f'"{sender_name}" <{sender_email}>'
+    msg['To'] = destinatario
+    
+    meta_info = ""
+    if dispositivo_id or dispositivos_info:
+        meta_info = f"<br><br><b>Detalles del dispositivo asociado:</b><br>"
+        meta_info += f"• ID de Dispositivo (Huella): {dispositivo_id or 'No registrado'}<br>"
+        meta_info += f"• Información adicional: {dispositivos_info or 'No disponible'}<br>"
+        
+    if accion == "SUSPENDIDA":
+        msg['Subject'] = f"ALERTA: Cuenta Suspendida - {cliente}"
+        body_text = f"La licencia con clave <b>{clave}</b> perteneciente a <b>{cliente}</b> ({email_cliente}) ha sido SUSPENDIDA.<br>Motivo: {motivo or 'No especificado'}.{meta_info}"
+    else:
+        msg['Subject'] = f"ALERTA: Licencia Eliminada - {cliente}"
+        body_text = f"La licencia con clave <b>{clave}</b> perteneciente a <b>{cliente}</b> ({email_cliente}) ha sido ELIMINADA del sistema.{meta_info}"
+        
+    body = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333333;">
+        <h2 style="color: #D9534F; border-bottom: 2px solid #D9534F; padding-bottom: 8px;">Alerta de Licenciamiento</h2>
+        <p>Estimado Soporte,</p>
+        <p>{body_text}</p>
+        <hr style="border: none; border-top: 1px solid #EEEEEE; margin: 20px 0;" />
+        <p style="font-size: 11px; color: #777777;">Este es un correo de alerta automático generado por el panel de administración de Katrix.</p>
+      </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, 'html', 'utf-8'))
+    
+    try:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=5)
+        server.ehlo()
+        server.starttls(context=context)
+        server.ehlo()
+        server.login(smtp_username, smtp_password)
+        server.sendmail(sender_email, [destinatario], msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error al enviar correo de alerta por SMTP: {e}")
         return False
 
 
@@ -2911,6 +3004,16 @@ def obtener_licencia_por_clave(clave: str) -> Optional[dict]:
     conn.close()
     return dict(row) if row else None
 
+
+def obtener_licencia_por_id(licencia_id: int) -> Optional[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM licencias WHERE id = ?", (licencia_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 def guardar_licencia(clave: str, cliente: str, email_cliente: str, 
                      fecha_expiracion: str, producto: str = "CRM",
                      estado: str = "activa", limite_dispositivos: int = 1) -> int:
@@ -2932,25 +3035,33 @@ def guardar_licencia(clave: str, cliente: str, email_cliente: str,
     conn.close()
     return row_id
 
-def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None, motivo: Optional[str] = None) -> bool:
+def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None, motivo: Optional[str] = None, dispositivos_info: Optional[str] = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN motivo TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    query = "UPDATE licencias SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, motivo=?"
+    params = [cliente.strip(), fecha_expiracion, estado, limite_dispositivos, motivo]
+    
     if dispositivo_id is not None:
-        cursor.execute("""
-            UPDATE licencias 
-            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, dispositivo_id=?, motivo=?
-            WHERE id=?
-        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, dispositivo_id, motivo, licencia_id))
-    else:
-        cursor.execute("""
-            UPDATE licencias 
-            SET cliente=?, fecha_expiracion=?, estado=?, limite_dispositivos=?, motivo=?
-            WHERE id=?
-        """, (cliente.strip(), fecha_expiracion, estado, limite_dispositivos, motivo, licencia_id))
+        query += ", dispositivo_id=?"
+        params.append(dispositivo_id)
+        
+    if dispositivos_info is not None:
+        query += ", dispositivos_info=?"
+        params.append(dispositivos_info)
+        
+    query += " WHERE id=?"
+    params.append(licencia_id)
+    
+    cursor.execute(query, tuple(params))
     ok = cursor.rowcount > 0
     conn.commit()
     conn.close()
@@ -2965,28 +3076,27 @@ def eliminar_licencia(licencia_id: int) -> bool:
     conn.close()
     return ok
 
-def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", dispositivo_nombre: str = "") -> dict:
-    clave = clave.strip().upper()
-    
-    # 1. Verificar firma HMAC
-    if not clave.startswith("KTX-TEST"):  # Excepción para la clave de prueba
-        if not verificar_firma_clave(clave):
-            return {
-                "valid": False,
-                "message": "Clave de licencia inválida o alterada",
-                "cliente": "", "fecha_expiracion": "", "producto": ""
-            }
-    
+def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", dispositivo_nombre: str = "", ip_address: str = "Desconocida") -> dict:
+    # Asegurar columna
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
+        pass
+
+    # 1. Obtener de DB
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM licencias WHERE clave = ?", (clave,))
+    cursor.execute("SELECT * FROM licencias WHERE clave = ?", (clave.strip().upper(),))
     row = cursor.fetchone()
     conn.close()
 
     if not row:
-        return {"valid": False, "message": "Clave de licencia inexistente",
-                "cliente": "", "fecha_expiracion": "", "producto": ""}
+        return {"valid": False, "message": "Clave de licencia inexistente", "cliente": "", "fecha_expiracion": "", "producto": ""}
 
     lic = dict(row)
 
@@ -3004,7 +3114,7 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
             return {"valid": False, "message": "La licencia ha expirado",
                     "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
                     "producto": lic.get("producto", "")}
-    except ValueError:
+    except Exception:
         pass
 
     # 4. Verificar email si está registrado
@@ -3017,6 +3127,14 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
     # 5. Verificar dispositivos
     registered_devices = [d.strip() for d in (lic["dispositivo_id"] or "").split(",") if d.strip()]
     
+    import json
+    try:
+        info = json.loads(lic.get("dispositivos_info") or "{}")
+    except Exception:
+        info = {}
+        
+    db_update_needed = False
+    
     if dispositivo_id not in registered_devices:
         if len(registered_devices) >= lic["limite_dispositivos"]:
             return {
@@ -3026,9 +3144,7 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
                 "producto": lic.get("producto", "")
             }
         registered_devices.append(dispositivo_id)
-        
-        import json
-        info = json.loads(lic.get("dispositivos_info") or "{}")
+        db_update_needed = True
         
         try:
             detalle = json.loads(dispositivo_nombre)
@@ -3038,8 +3154,37 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
             detalle = {"nombre": dispositivo_nombre}
             
         detalle["primer_uso"] = datetime.now().isoformat()[:16]
+        detalle["ip"] = ip_address
+        detalle["ultimo_uso"] = datetime.now().isoformat()[:16]
         info[dispositivo_id] = detalle
+    else:
+        if dispositivo_id not in info:
+            try:
+                detalle = json.loads(dispositivo_nombre)
+                if not isinstance(detalle, dict):
+                    detalle = {"nombre": str(dispositivo_nombre)}
+            except Exception:
+                detalle = {"nombre": dispositivo_nombre}
+            detalle["primer_uso"] = datetime.now().isoformat()[:16]
+            info[dispositivo_id] = detalle
+            db_update_needed = True
+        else:
+            detalle = info[dispositivo_id]
+            try:
+                nuevo_detalle = json.loads(dispositivo_nombre)
+                if isinstance(nuevo_detalle, dict):
+                    for k, v in nuevo_detalle.items():
+                        detalle[k] = v
+            except Exception:
+                if dispositivo_nombre:
+                    detalle["nombre"] = dispositivo_nombre
         
+        if detalle.get("ip") != ip_address or detalle.get("ultimo_uso") != datetime.now().isoformat()[:16]:
+            detalle["ip"] = ip_address
+            detalle["ultimo_uso"] = datetime.now().isoformat()[:16]
+            db_update_needed = True
+
+    if db_update_needed:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE licencias SET dispositivo_id = ?, dispositivos_info = ? WHERE id = ?",
@@ -3058,64 +3203,122 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
 
 
 def obtener_panel_username() -> str:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT valor FROM panel_settings WHERE clave = 'username'")
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return row[0]
-    # Si no existía, inicializar con panel_admin
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", "panel_admin"))
-    conn.commit()
-    conn.close()
-    return "panel_admin"
+    return "kadmin"
 
 
 def actualizar_panel_username(nuevo_user: str):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", nuevo_user))
-    conn.commit()
-    conn.close()
+    pass
 
 
 def obtener_panel_password_hash() -> str:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT valor FROM panel_settings WHERE clave = 'password_hash'")
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return row[0]
-    # Si no existía, inicializar con admin123
-    hashed = hash_password("admin123")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hashed))
-    conn.commit()
-    conn.close()
-    return hashed
+    user = obtener_panel_user("kadmin")
+    kadmin_pass = os.environ.get("KATRIX_KADMIN_PASSWORD", "Katrix2026$")
+    return user["password_hash"] if user else hash_password(kadmin_pass)
 
 
 def actualizar_panel_password(nueva_pass: str):
-    hashed = hash_password(nueva_pass)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hashed))
-    conn.commit()
-    conn.close()
+    actualizar_panel_user("kadmin", nueva_pass, "superadmin", '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":true,"eliminar_licencia":true,"ver_dispositivos":true,"desvincular_dispositivo":true}')
 
 
-def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nombre: str):
+# --- CRUD panel_users ---
+def obtener_panel_user(username: str) -> Optional[dict]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, password_hash, role, permissions FROM panel_users WHERE username = ?", (username.strip(),))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"Error obtener_panel_user: {e}")
+        return None
+
+
+def crear_panel_user(username: str, password_txt: str, role: str, permissions: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        hashed = hash_password(password_txt)
+        cursor.execute("""
+            INSERT INTO panel_users (username, password_hash, role, permissions)
+            VALUES (?, ?, ?, ?)
+        """, (username.strip(), hashed, role, permissions))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error crear_panel_user: {e}")
+        return False
+
+
+def actualizar_panel_user(username: str, password_txt: Optional[str], role: str, permissions: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        if password_txt and password_txt.strip():
+            hashed = hash_password(password_txt)
+            cursor.execute("""
+                UPDATE panel_users 
+                SET password_hash = ?, role = ?, permissions = ? 
+                WHERE username = ?
+            """, (hashed, role, permissions, username.strip()))
+        else:
+            cursor.execute("""
+                UPDATE panel_users 
+                SET role = ?, permissions = ? 
+                WHERE username = ?
+            """, (role, permissions, username.strip()))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+    except Exception as e:
+        print(f"Error actualizar_panel_user: {e}")
+        return False
+
+
+def eliminar_panel_user(username: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM panel_users WHERE username = ?", (username.strip(),))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+    except Exception as e:
+        print(f"Error eliminar_panel_user: {e}")
+        return False
+
+
+def obtener_todos_panel_users() -> list:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, role, permissions FROM panel_users ORDER BY username ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error obtener_todos_panel_users: {e}")
+        return []
+
+
+def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nombre: str, username: str = "kadmin"):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    # Asegurar columna username
+    try:
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     cursor.execute("""
-        INSERT OR REPLACE INTO panel_biometrics (credential_id, public_key, dispositivo_nombre)
-        VALUES (?, ?, ?)
-    """, (credential_id, public_key, dispositivo_nombre))
+        INSERT OR REPLACE INTO panel_biometrics (credential_id, public_key, dispositivo_nombre, username)
+        VALUES (?, ?, ?, ?)
+    """, (credential_id, public_key, dispositivo_nombre, username))
     conn.commit()
     conn.close()
 
@@ -3123,14 +3326,21 @@ def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nom
 def obtener_panel_biometric(credential_id: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT credential_id, public_key, dispositivo_nombre FROM panel_biometrics WHERE credential_id = ?", (credential_id,))
+    # Asegurar columna username
+    try:
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("SELECT credential_id, public_key, dispositivo_nombre, username FROM panel_biometrics WHERE credential_id = ?", (credential_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
         return {
             "credential_id": row[0],
             "public_key": row[1],
-            "dispositivo_nombre": row[2]
+            "dispositivo_nombre": row[2],
+            "username": row[3] or "kadmin"
         }
     return None
 
@@ -3138,14 +3348,21 @@ def obtener_panel_biometric(credential_id: str) -> dict:
 def obtener_todos_panel_biometrics() -> list:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT credential_id, dispositivo_nombre, creado_en FROM panel_biometrics ORDER BY creado_en DESC")
+    # Asegurar columna username
+    try:
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("SELECT credential_id, dispositivo_nombre, creado_en, username FROM panel_biometrics ORDER BY creado_en DESC")
     rows = cursor.fetchall()
     conn.close()
     return [
         {
             "credential_id": r[0],
             "dispositivo_nombre": r[1],
-            "creado_en": r[2]
+            "creado_en": r[2],
+            "username": r[3] or "kadmin"
         }
         for r in rows
     ]

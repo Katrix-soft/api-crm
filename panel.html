@@ -2,8 +2,13 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>Panel de Licencias — Katrix</title>
+<link rel="manifest" href="/panel/manifest.json" />
+<meta name="theme-color" content="#0f172a" />
+<link rel="apple-touch-icon" href="/panel/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <style>
   :root{
     --bg:#0f1115; --panel:#161922; --panel2:#1d212c; --border:#2a2f3a;
@@ -111,6 +116,24 @@
     border:1px solid var(--border); border-radius:10px; padding:12px 16px;
     font-size:13px; display:none; z-index:60; max-width:320px;
   }
+  /* ---- Tabs Navigation ---- */
+  .tabs-nav {
+    display: flex; gap: 8px; margin-bottom: 20px;
+    border-bottom: 1px solid var(--border); padding-bottom: 0px;
+    overflow-x: auto;
+  }
+  .tab-btn {
+    background: transparent; border: none; padding: 12px 18px;
+    color: var(--muted); font-weight: 500; cursor: pointer;
+    border-bottom: 3px solid transparent; border-radius: 0;
+    transition: color .2s, border-color .2s; white-space: nowrap;
+    outline: none;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
   @media (max-width:640px){
     header.top{ flex-direction:column; align-items:flex-start; }
     .row-actions{ justify-content:flex-start; }
@@ -118,6 +141,10 @@
 </style>
 </head>
 <body>
+
+<div id="offlineBanner" style="display:none; background:var(--red-bg); color:var(--red); text-align:center; padding:10px; font-size:13px; font-weight:600; border-bottom:1px solid var(--border);">
+  ⚠️ Sin conexión a internet. Mostrando datos locales (offline).
+</div>
 
 <!-- ============ LOGIN ============ -->
 <div id="loginScreen">
@@ -157,6 +184,7 @@
       <p id="userInfo"></p>
     </div>
     <div style="display:flex; gap:8px;">
+      <button class="btn-ghost" id="btnManageUsers" style="display:none;">👥 Usuarios</button>
       <button class="btn-ghost" id="btnChangePass" style="display:none;">🔐 Cambiar Clave Panel</button>
       <button class="btn-ghost" id="btnRegBio" style="display:none;">👤 Registrar Huella</button>
       <button class="btn-ghost" id="btnNueva"><span style="margin-right:6px;">+</span>Nueva licencia</button>
@@ -164,46 +192,197 @@
     </div>
   </header>
 
-  <div class="stats">
-    <div class="stat"><div class="label">Activas</div><div class="value" id="statActivas">0</div></div>
-    <div class="stat"><div class="label">Por vencer (15 días)</div><div class="value" id="statPorVencer">0</div></div>
-    <div class="stat"><div class="label">Suspendidas</div><div class="value" id="statSuspendidas">0</div></div>
-    <div class="stat"><div class="label">Total</div><div class="value" id="statTotal">0</div></div>
+  <!-- Navigation Tabs -->
+  <div class="tabs-nav" style="margin-bottom:20px;">
+    <button class="tab-btn active" data-tab="tab-licencias">🔑 Licencias</button>
+    <button class="tab-btn" id="navTabUsers" data-tab="tab-usuarios" style="display:none;">👥 Usuarios</button>
+    <button class="tab-btn" id="navTabSesiones" data-tab="tab-sesiones" style="display:none;">🌐 Sesiones Activas</button>
+    <button class="tab-btn" id="navTabLogs" data-tab="tab-logs" style="display:none;">📋 Logs de Auditoría</button>
   </div>
 
-  <div class="toolbar">
-    <input type="text" id="buscar" placeholder="Buscar por cliente, email o clave..." />
-    <select id="filtroEstado">
-      <option value="todos">Todos los estados</option>
-      <option value="activa">Activa</option>
-      <option value="suspendida">Suspendida</option>
-      <option value="expirada">Expirada</option>
-    </select>
-    <select id="filtroProducto">
-      <option value="todos">Todos los productos</option>
-      <option value="CRM">CRM</option>
-      <option value="ERP">ERP</option>
-      <option value="POS">POS</option>
-    </select>
-    <button class="btn-ghost" id="btnRefrescar">Actualizar</button>
+  <!-- Tab 1: Licencias -->
+  <div id="tab-licencias" class="tab-content active">
+    <div class="stats">
+      <div class="stat"><div class="label">Activas</div><div class="value" id="statActivas">0</div></div>
+      <div class="stat"><div class="label">Por vencer (15 días)</div><div class="value" id="statPorVencer">0</div></div>
+      <div class="stat"><div class="label">Suspendidas</div><div class="value" id="statSuspendidas">0</div></div>
+      <div class="stat"><div class="label">Total</div><div class="value" id="statTotal">0</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="buscar" placeholder="Buscar por cliente, email o clave..." />
+      <select id="filtroEstado">
+        <option value="todos">Todos los estados</option>
+        <option value="activa">Activa</option>
+        <option value="suspendida">Suspendida</option>
+        <option value="expirada">Expirada</option>
+      </select>
+      <select id="filtroProducto">
+        <option value="todos">Todos los productos</option>
+        <option value="CRM">CRM</option>
+        <option value="ERP">ERP</option>
+        <option value="POS">POS</option>
+      </select>
+      <button class="btn-ghost" id="btnRefrescar">Actualizar</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th>Clave</th>
+            <th>Producto</th>
+            <th>Vence</th>
+            <th>Dispositivos</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tablaBody"></tbody>
+      </table>
+      <p class="empty" id="emptyMsg" style="display:none;">No se encontraron licencias.</p>
+    </div>
   </div>
 
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Cliente</th>
-          <th>Clave</th>
-          <th>Producto</th>
-          <th>Vence</th>
-          <th>Dispositivos</th>
-          <th>Estado</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="tablaBody"></tbody>
-    </table>
-    <p class="empty" id="emptyMsg" style="display:none;">No se encontraron licencias.</p>
+  <!-- Tab 2: Usuarios Panel -->
+  <div id="tab-usuarios" class="tab-content">
+    <div class="toolbar" style="justify-content: space-between; align-items: center; margin-bottom: 16px; display:flex;">
+      <div style="font-size: 14px; font-weight: 600; color: var(--accent);">Gestión de Usuarios del Panel</div>
+      <button class="btn-primary" id="btnTabNewUser" style="padding: 8px 14px; font-size: 13px;">+ Nuevo Usuario</button>
+    </div>
+    
+    <div class="table-wrap" style="margin-bottom: 24px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Usuario</th>
+            <th>Rol</th>
+            <th>Permisos</th>
+            <th style="text-align: center;">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="tabUsersTableBody">
+          <!-- Dinámico -->
+        </tbody>
+      </table>
+    </div>
+    
+    <!-- Formulario de Usuario Integrado -->
+    <div id="tabUserFormCard" style="display:none; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-top: 20px; max-width: 600px;">
+      <h3 id="tabUserFormTitle" style="margin-top:0; margin-bottom:15px; font-size:16px;">Crear / Editar Usuario</h3>
+      <input type="hidden" id="tabUserEditMode" value="create" />
+      <div class="field">
+        <label>Nombre de Usuario</label>
+        <input id="tabUserUsername" type="text" placeholder="Ej. ricardodev" />
+      </div>
+      <div class="field">
+        <label>Contraseña <span id="tabPwdLabelHelp" style="color:var(--muted); font-size:11px;">(mínimo 4 caracteres)</span></label>
+        <input id="tabUserPassword" type="password" placeholder="••••••••" />
+      </div>
+      <div class="field">
+        <label>Rol</label>
+        <select id="tabUserRole">
+          <option value="admin">Admin</option>
+          <option value="superadmin">Superadmin</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Permisos Granulares</label>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_ver_licencias" checked /> Ver Licencias
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_crear_licencia" checked /> Crear Licencia
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_editar_licencia" checked /> Editar Licencia
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_suspender_licencia" checked /> Suspender Licencia
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_desvincular_dispositivo" checked /> Desvincular Dispositivo
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_eliminar_licencia" checked /> Eliminar Licencia
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_ver_sesiones" checked /> Ver Sesiones Activas
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_desvincular_sesion" checked /> Desconectar Usuarios
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+            <input type="checkbox" id="tab_perm_ver_logs" checked /> Ver Logs Auditoría
+          </label>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+        <button class="btn-ghost" id="btnCancelTabUserForm">Cancelar</button>
+        <button class="btn-primary" id="btnSaveTabUser">Guardar Usuario</button>
+      </div>
+      <div id="tabUserError" style="color:var(--red); font-size:13px; margin-top:10px; display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Tab 3: Sesiones Activas -->
+  <div id="tab-sesiones" class="tab-content">
+    <div class="toolbar" style="justify-content: space-between; align-items: center; margin-bottom: 16px; display:flex;">
+      <div style="font-size: 14px; font-weight: 600; color: var(--accent);">Monitoreo de Usuarios en Línea (Sesiones Activas)</div>
+      <button class="btn-ghost" id="btnRefrescarSesiones">Refrescar Sesiones</button>
+    </div>
+    
+    <div class="table-wrap">
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Usuario</th>
+            <th>Rol</th>
+            <th>IP Origen</th>
+            <th>Navegador / Sistema</th>
+            <th>Última Actividad</th>
+            <th style="text-align: center;">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="sesionesTableBody">
+          <!-- Dinámico -->
+        </tbody>
+      </table>
+      <p class="empty" id="emptySesionesMsg" style="display:none;">No hay sesiones activas.</p>
+    </div>
+  </div>
+
+  <!-- Tab 4: Logs de Auditoría -->
+  <div id="tab-logs" class="tab-content">
+    <div class="toolbar" style="display:flex; gap:8px;">
+      <input type="text" id="buscarLogs" placeholder="Buscar en logs por usuario, acción o detalles..." style="flex:1;" />
+      <select id="filtroLimiteLogs">
+        <option value="50">Mostrar 50 registros</option>
+        <option value="100" selected>Mostrar 100 registros</option>
+        <option value="250">Mostrar 250 registros</option>
+        <option value="500">Mostrar 500 registros</option>
+      </select>
+      <button class="btn-ghost" id="btnRefrescarLogs">Actualizar Logs</button>
+    </div>
+    
+    <div class="table-wrap">
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Fecha / Hora</th>
+            <th>Usuario</th>
+            <th>Acción</th>
+            <th>Detalles</th>
+          </tr>
+        </thead>
+        <tbody id="logsTableBody">
+          <!-- Dinámico -->
+        </tbody>
+      </table>
+      <p class="empty" id="emptyLogsMsg" style="display:none;">No se encontraron logs.</p>
+    </div>
   </div>
 </div>
 
@@ -291,6 +470,36 @@
   </div>
 </div>
 
+
+<!-- ============ MODAL: Dispositivos Vinculados ============ -->
+<div class="modal-overlay" id="modalDispositivosOverlay" style="display:none;">
+  <div class="modal" style="max-width: 700px;">
+    <h2>Dispositivos Vinculados</h2>
+    <p style="font-size:13px; color:var(--muted); margin-bottom:14px;">Detalles de los equipos que tienen asociada esta licencia para evitar duplicidad y uso compartido.</p>
+    
+    <div style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px;">
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <thead>
+          <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border);">
+            <th style="padding: 10px; text-align: left;">IP / Usuario SO</th>
+            <th style="padding: 10px; text-align: left;">Sistema / CPU</th>
+            <th style="padding: 10px; text-align: left;">Primer Uso / Último Uso</th>
+            <th style="padding: 10px; text-align: center;">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="dispositivosTableBody">
+          <!-- Se llena dinámicamente -->
+        </tbody>
+      </table>
+    </div>
+    
+    <div class="modal-actions">
+      <button class="btn-danger" id="btnDesvincularTodos" style="margin-right: auto;">Desvincular Todos</button>
+      <button class="btn-ghost" id="btnCerrarDispositivos">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ MODAL: Confirmación Personalizada (Premium) ============ -->
 <div class="modal-overlay" id="confirmModalOverlay" style="display:none;">
   <div class="modal" style="max-width: 420px; border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
@@ -318,6 +527,14 @@ let USER = null;
 let licencias = [];
 
 const $ = (id) => document.getElementById(id);
+
+function hasPerm(permission) {
+  if (!USER) return false;
+  if (USER.role === "panel_superadmin") return true;
+  if (USER.role === "admin") return true; // general CRM admin
+  if (!USER.permissions) return true;
+  return USER.permissions[permission] !== false;
+}
 
 function showToast(msg, isError){
   const t = $("toast");
@@ -381,7 +598,7 @@ async function login(){
       throw new Error(j.detail || "Usuario o contraseña incorrectos");
     }
     const data = await res.json();
-    if (data.role !== "panel_admin"){
+    if (data.role !== "panel_admin" && data.role !== "panel_superadmin"){
       throw new Error("Acceso denegado: rol de administrador del panel requerido.");
     }
     TOKEN = data.access_token;
@@ -419,9 +636,9 @@ $("chkShowModalPass").addEventListener("change", function() {
 function mostrarDashboard(){
   $("loginScreen").style.display = "none";
   $("dashboard").style.display = "block";
-  $("userInfo").textContent = `Conectado como ${USER.username} · ${API_BASE}`;
+  $("userInfo").textContent = `Conectado como ${USER.username} (${USER.role}) · ${API_BASE}`;
   
-  if (USER.role === "panel_admin") {
+  if (USER.role === "panel_admin" || USER.role === "panel_superadmin" || USER.role === "superadmin") {
     $("btnChangePass").style.display = "inline-flex";
     $("btnRegBio").style.display = "inline-flex";
   } else {
@@ -429,7 +646,40 @@ function mostrarDashboard(){
     $("btnRegBio").style.display = "none";
   }
   
-  cargarLicencias();
+  if (USER.role === "panel_superadmin" || USER.role === "superadmin") {
+    $("btnManageUsers").style.display = "inline-flex";
+  } else {
+    $("btnManageUsers").style.display = "none";
+  }
+  
+  if (hasPerm("crear_licencia")) {
+    $("btnNueva").style.display = "inline-flex";
+  } else {
+    $("btnNueva").style.display = "none";
+  }
+
+  // Control Visibility of Tabs
+  if (USER.role === "panel_superadmin" || USER.role === "superadmin") {
+    $("navTabUsers").style.display = "inline-flex";
+    $("navTabSesiones").style.display = "inline-flex";
+    $("navTabLogs").style.display = "inline-flex";
+  } else {
+    $("navTabUsers").style.display = "none";
+    
+    if (hasPerm("ver_sesiones")) {
+      $("navTabSesiones").style.display = "inline-flex";
+    } else {
+      $("navTabSesiones").style.display = "none";
+    }
+    
+    if (hasPerm("ver_logs")) {
+      $("navTabLogs").style.display = "inline-flex";
+    } else {
+      $("navTabLogs").style.display = "none";
+    }
+  }
+
+  switchTab("tab-licencias");
 }
 
 async function checkBiometricsSupport() {
@@ -463,7 +713,7 @@ async function checkBiometricsSupport() {
   const b = sessionStorage.getItem("katrix_api_base");
   if (t && u && b){
     const parsedUser = JSON.parse(u);
-    if (parsedUser.role === "panel_admin") {
+    if (parsedUser.role === "panel_admin" || parsedUser.role === "panel_superadmin") {
       TOKEN = t; USER = parsedUser; API_BASE = b;
       $("apiBase").value = API_BASE;
       mostrarDashboard();
@@ -686,10 +936,18 @@ function diasRestantes(fechaISO){
 async function cargarLicencias(){
   try{
     licencias = await apiFetch("/licencias/");
+    localStorage.setItem("katrix_cached_licencias", JSON.stringify(licencias));
     render();
   }catch(err){
     if (err.message !== "401") {
-      showToast("No se pudieron obtener los datos. Por favor, contacte al administrador del sistema.", true);
+      const cached = localStorage.getItem("katrix_cached_licencias");
+      if (cached) {
+        licencias = JSON.parse(cached);
+        render();
+        showToast("Visualizando datos guardados localmente (sin conexión).");
+      } else {
+        showToast("No se pudieron obtener los datos. Por favor, contacte al administrador del sistema.", true);
+      }
     }
   }
 }
@@ -726,6 +984,16 @@ function render(){
     const claseBadge = l.estado === "activa" ? "badge-activa" : (l.estado === "suspendida" ? "badge-suspendida" : "badge-expirada");
     const labelEstado = l.estado === "activa" ? (dias < 0 ? "Vencida" : "Activa") : (l.estado === "suspendida" ? "Suspendida" : "Expirada");
 
+    let dispositivos = [];
+    try {
+      const info = JSON.parse(l.dispositivos_info || '{}');
+      dispositivos = Object.keys(info).map(k => ({
+        id: k,
+        ...info[k]
+      }));
+    } catch(e) {}
+    const cantDisp = dispositivos.length;
+
     tr.innerHTML = `
       <td>
         <div style="font-weight:600;">${l.cliente}</div>
@@ -734,15 +1002,25 @@ function render(){
       <td class="clave">${l.clave}</td>
       <td>${l.producto || "-"}</td>
       <td>${venceTxt}${dias>=0 && dias<=15 ? ` <span style="color:var(--amber); font-size:11px;">(${dias}d)</span>` : ""}</td>
-      <td>${l.limite_dispositivos}</td>
+      <td>
+        <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; cursor: pointer; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="mostrarDispositivos(${l.id})">
+          ${cantDisp}/${l.limite_dispositivos} <span style="font-size:10px;">🔍</span>
+        </span>
+      </td>
       <td><span class="badge ${claseBadge}">${labelEstado}</span></td>
       <td>
         <div class="row-actions">
-          ${l.estado !== "suspendida"
-            ? `<button class="btn-warn" data-action="suspender" data-id="${l.id}">Suspender</button>`
-            : `<button class="btn-ok" data-action="reactivar" data-id="${l.id}">Reactivar</button>`}
-          <button class="btn-ghost" data-action="editar" data-id="${l.id}">Editar</button>
-          <button class="btn-danger" data-action="eliminar" data-id="${l.id}">Eliminar</button>
+          ${hasPerm("suspender_licencia")
+            ? (l.estado !== "suspendida"
+              ? `<button class="btn-warn" data-action="suspender" data-id="${l.id}">Suspender</button>`
+              : `<button class="btn-ok" data-action="reactivar" data-id="${l.id}">Reactivar</button>`)
+            : ""}
+          ${hasPerm("editar_licencia")
+            ? `<button class="btn-ghost" data-action="editar" data-id="${l.id}">Editar</button>`
+            : ""}
+          ${hasPerm("eliminar_licencia")
+            ? `<button class="btn-danger" data-action="eliminar" data-id="${l.id}">Eliminar</button>`
+            : ""}
         </div>
       </td>
     `;
@@ -851,6 +1129,143 @@ function abrirModal(lic){
 }
 function cerrarModal(){ $("modalOverlay").style.display = "none"; }
 
+/* ---------------- DISPOSITIVOS VINCULADOS ---------------- */
+let currentLicIdParaDispositivos = null;
+
+function mostrarDispositivos(licId) {
+  const lic = licencias.find(l => l.id === licId);
+  if (!lic) return;
+  currentLicIdParaDispositivos = licId;
+  
+  let dispositivos = [];
+  try {
+    const info = JSON.parse(lic.dispositivos_info || '{}');
+    dispositivos = Object.keys(info).map(k => ({
+      id: k,
+      ...info[k]
+    }));
+  } catch(e) {}
+  
+  const tbody = $("dispositivosTableBody");
+  tbody.innerHTML = "";
+  
+  const showDesvincular = hasPerm("desvincular_dispositivo");
+  $("btnDesvincularTodos").style.display = (showDesvincular && dispositivos.length > 0) ? "inline-flex" : "none";
+  
+  if (dispositivos.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--muted);">No hay dispositivos vinculados aún.</td></tr>`;
+  } else {
+    dispositivos.forEach(d => {
+      let sysName = d.sistema_operativo || d.nombre || "Desconocido";
+      let sysUser = d.usuario || "desconocido";
+      let cpu = d.procesador || "N/A";
+      
+      const tr = document.createElement("tr");
+      tr.style.borderBottom = "1px solid var(--border)";
+      tr.innerHTML = `
+        <td style="padding: 10px; vertical-align: top;">
+          <div style="font-weight:600;">${d.ip || "Desconocida"}</div>
+          <div style="font-size:11px; color:var(--muted);">Usuario SO: ${sysUser}</div>
+        </td>
+        <td style="padding: 10px; vertical-align: top;">
+          <div>${sysName}</div>
+          <div style="font-size:11px; color:var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">CPU: ${cpu}</div>
+        </td>
+        <td style="padding: 10px; vertical-align: top;">
+          <div style="font-size:11px;">Primer: ${d.primer_uso || "N/A"}</div>
+          <div style="font-size:11px; color:var(--muted);">Último: ${d.ultimo_uso || "N/A"}</div>
+        </td>
+        <td style="padding: 10px; text-align: center; vertical-align: middle;">
+          ${showDesvincular 
+            ? `<button class="btn-danger" style="font-size:11px; padding:4px 8px;" onclick="desvincularDispositivo('${d.id}')">Desvincular</button>`
+            : `<span style="color:var(--muted); font-size:11px;">Sin permiso</span>`}
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  
+  $("modalDispositivosOverlay").style.display = "flex";
+}
+
+$("btnCerrarDispositivos").addEventListener("click", () => {
+  $("modalDispositivosOverlay").style.display = "none";
+});
+
+$("btnDesvincularTodos").addEventListener("click", async () => {
+  const lic = licencias.find(l => l.id === currentLicIdParaDispositivos);
+  if (!lic) return;
+  
+  customConfirm({
+    title: "Desvincular Todos",
+    message: `¿Desvincular TODOS los dispositivos de la licencia de "${lic.cliente}"?`,
+    onAccept: async () => {
+      try {
+        await apiFetch(`/licencias/${lic.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            cliente: lic.cliente,
+            fecha_expiracion: lic.fecha_expiracion,
+            estado: lic.estado,
+            limite_dispositivos: lic.limite_dispositivos,
+            dispositivo_id: null,
+            motivo: lic.motivo || null,
+            dispositivos_info: "{}"
+          })
+        });
+        showToast("Todos los dispositivos desvinculados.");
+        $("modalDispositivosOverlay").style.display = "none";
+        await cargarLicencias();
+      } catch(err) {
+        showToast(err.message, true);
+      }
+    }
+  });
+});
+
+async function desvincularDispositivo(devId) {
+  const lic = licencias.find(l => l.id === currentLicIdParaDispositivos);
+  if (!lic) return;
+  
+  customConfirm({
+    title: "Desvincular Dispositivo",
+    message: `¿Desvincular este dispositivo de la licencia?`,
+    onAccept: async () => {
+      let info = {};
+      try {
+        info = JSON.parse(lic.dispositivos_info || '{}');
+      } catch(e) {}
+      
+      delete info[devId];
+      
+      const registered = (lic.dispositivo_id || "").split(",").map(x => x.trim()).filter(x => x && x !== devId);
+      
+      try {
+        await apiFetch(`/licencias/${lic.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            cliente: lic.cliente,
+            fecha_expiracion: lic.fecha_expiracion,
+            estado: lic.estado,
+            limite_dispositivos: lic.limite_dispositivos,
+            dispositivo_id: registered.join(",") || null,
+            motivo: lic.motivo || null,
+            dispositivos_info: JSON.stringify(info)
+          })
+        });
+        showToast("Dispositivo desvinculado.");
+        $("modalDispositivosOverlay").style.display = "none";
+        await cargarLicencias();
+        if (registered.length > 0) {
+          mostrarDispositivos(lic.id);
+        }
+      } catch(err) {
+        showToast(err.message, true);
+      }
+    }
+  });
+}
+
 $("btnGuardarModal").addEventListener("click", async ()=>{
   const id = $("fId").value;
   const cliente = $("fCliente").value.trim();
@@ -874,7 +1289,8 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
           estado: lic ? lic.estado : "activa",
           limite_dispositivos: limite,
           dispositivo_id: lic ? lic.dispositivo_id || null : null,
-          motivo: lic ? lic.motivo || null : null
+          motivo: lic ? lic.motivo || null : null,
+          dispositivos_info: lic ? lic.dispositivos_info || null : null
         }),
       });
       showToast("Licencia actualizada.");
@@ -893,6 +1309,396 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
     cargarLicencias();
   }catch(err){ showToast(err.message, true); }
 });
+
+/* ---------------- TABS NAVIGATION & MULTI-ROLE SECTIONS ---------------- */
+
+// Switch tab function
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    if (btn.getAttribute('data-tab') === tabId) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  
+  document.querySelectorAll('.tab-content').forEach(c => {
+    if (c.id === tabId) {
+      c.classList.add('active');
+    } else {
+      c.classList.remove('active');
+    }
+  });
+  
+  // Close user form if switching away
+  if (tabId !== 'tab-usuarios') {
+    $("tabUserFormCard").style.display = "none";
+  }
+  
+  // Load data based on active tab
+  if (tabId === 'tab-licencias') {
+    cargarLicencias();
+  } else if (tabId === 'tab-usuarios') {
+    cargarUsuariosPanelTab();
+  } else if (tabId === 'tab-sesiones') {
+    cargarSesionesActivas();
+  } else if (tabId === 'tab-logs') {
+    cargarLogsAuditoria();
+  }
+}
+
+// Hook up tab buttons click event
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    switchTab(btn.getAttribute('data-tab'));
+  });
+});
+
+// Redirect header button to tab
+$("btnManageUsers").addEventListener("click", () => {
+  switchTab("tab-usuarios");
+});
+
+
+/* ---------------- TAB 2: GESTIÓN DE USUARIOS ---------------- */
+let tabPanelUsers = [];
+
+async function cargarUsuariosPanelTab() {
+  try {
+    tabPanelUsers = await apiFetch("/panel/users");
+    renderTabUsers();
+  } catch(e) {
+    showToast("Error al cargar usuarios de panel: " + e.message, true);
+  }
+}
+
+function renderTabUsers() {
+  const tbody = $("tabUsersTableBody");
+  tbody.innerHTML = "";
+  tabPanelUsers.forEach(u => {
+    const tr = document.createElement("tr");
+    tr.style.borderBottom = "1px solid var(--border)";
+    
+    let permList = [];
+    for (const key in u.permissions) {
+      if (u.permissions[key] === true) {
+        permList.push(key.replace(/_/g, " "));
+      }
+    }
+    const permTxt = u.role === "superadmin" ? "Acceso Total (Superadmin)" : (permList.length > 0 ? permList.join(", ") : "Ninguno");
+    
+    tr.innerHTML = `
+      <td style="padding: 12px; font-weight: 600;">${u.username}</td>
+      <td style="padding: 12px;"><span class="badge ${u.role === 'superadmin' ? 'badge-activa' : 'badge-expirada'}">${u.role}</span></td>
+      <td style="padding: 12px; font-size: 12px; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${permTxt}">${permTxt}</td>
+      <td style="padding: 12px; text-align: center;">
+        <button class="btn-ghost" style="padding: 4px 8px; font-size: 12px; margin-right: 4px;" onclick="editarTabPanelUser('${u.username}')">Editar</button>
+        <button class="btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="eliminarTabPanelUser('${u.username}')">Eliminar</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+$("btnTabNewUser").addEventListener("click", () => {
+  $("tabUserEditMode").value = "create";
+  $("tabUserUsername").value = "";
+  $("tabUserUsername").disabled = false;
+  $("tabUserPassword").value = "";
+  $("tabPwdLabelHelp").textContent = "(mínimo 4 caracteres)";
+  $("tabUserRole").value = "admin";
+  
+  const checkboxes = ["ver_licencias", "crear_licencia", "editar_licencia", "suspender_licencia", "desvincular_dispositivo", "eliminar_licencia", "ver_sesiones", "desvincular_sesion", "ver_logs"];
+  checkboxes.forEach(p => {
+    $("tab_perm_" + p).checked = true;
+    $("tab_perm_" + p).disabled = false;
+  });
+  
+  $("tabUserFormCard").style.display = "block";
+  $("tabUserError").style.display = "none";
+  $("tabUserFormTitle").textContent = "Crear Nuevo Usuario";
+  $("tabUserFormCard").scrollIntoView({ behavior: 'smooth' });
+});
+
+$("btnCancelTabUserForm").addEventListener("click", () => {
+  $("tabUserFormCard").style.display = "none";
+});
+
+window.editarTabPanelUser = function(username) {
+  const u = tabPanelUsers.find(x => x.username === username);
+  if (!u) return;
+  
+  $("tabUserEditMode").value = "update";
+  $("tabUserUsername").value = u.username;
+  $("tabUserUsername").disabled = true;
+  $("tabUserPassword").value = "";
+  $("tabPwdLabelHelp").textContent = "(dejar vacío para mantener actual)";
+  $("tabUserRole").value = u.role;
+  
+  const checkboxes = ["ver_licencias", "crear_licencia", "editar_licencia", "suspender_licencia", "desvincular_dispositivo", "eliminar_licencia", "ver_sesiones", "desvincular_sesion", "ver_logs"];
+  checkboxes.forEach(p => {
+    $("tab_perm_" + p).checked = u.permissions[p] !== false;
+    $("tab_perm_" + p).disabled = u.role === "superadmin";
+  });
+  
+  $("tabUserFormCard").style.display = "block";
+  $("tabUserError").style.display = "none";
+  $("tabUserFormTitle").textContent = `Editar Usuario: ${u.username}`;
+  $("tabUserFormCard").scrollIntoView({ behavior: 'smooth' });
+};
+
+$("tabUserRole").addEventListener("change", function() {
+  const isSuper = this.value === "superadmin";
+  const checkboxes = ["ver_licencias", "crear_licencia", "editar_licencia", "suspender_licencia", "desvincular_dispositivo", "eliminar_licencia", "ver_sesiones", "desvincular_sesion", "ver_logs"];
+  checkboxes.forEach(p => {
+    if (isSuper) {
+      $("tab_perm_" + p).checked = true;
+      $("tab_perm_" + p).disabled = true;
+    } else {
+      $("tab_perm_" + p).disabled = false;
+    }
+  });
+});
+
+window.eliminarTabPanelUser = function(username) {
+  if (username === USER.username) {
+    showToast("No podés eliminar a tu propio usuario", true);
+    return;
+  }
+  
+  customConfirm({
+    title: "Eliminar Usuario de Panel",
+    message: `¿Eliminar al usuario "${username}"? Esto revocará su acceso inmediatamente.`,
+    onAccept: async () => {
+      try {
+        await apiFetch(`/panel/users/${username}`, {
+          method: "DELETE"
+        });
+        showToast("Usuario eliminado exitosamente.");
+        await cargarUsuariosPanelTab();
+      } catch(e) {
+        showToast(e.message, true);
+      }
+    }
+  });
+};
+
+$("btnSaveTabUser").addEventListener("click", async () => {
+  const mode = $("tabUserEditMode").value;
+  const username = $("tabUserUsername").value.trim();
+  const password = $("tabUserPassword").value;
+  const role = $("tabUserRole").value;
+  
+  const errBox = $("tabUserError");
+  errBox.style.display = "none";
+  
+  if (mode === "create" && (!username || !password)) {
+    errBox.textContent = "Completá todos los campos para crear el usuario.";
+    errBox.style.display = "block";
+    return;
+  }
+  
+  const permissions = {};
+  const checkboxes = ["ver_licencias", "crear_licencia", "editar_licencia", "suspender_licencia", "desvincular_dispositivo", "eliminar_licencia", "ver_sesiones", "desvincular_sesion", "ver_logs"];
+  checkboxes.forEach(p => {
+    permissions[p] = $("tab_perm_" + p).checked;
+  });
+  
+  try {
+    if (mode === "create") {
+      await apiFetch("/panel/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username, password, role, permissions
+        })
+      });
+      showToast("Usuario creado correctamente.");
+    } else {
+      const payload = { role, permissions };
+      if (password.trim().length > 0) {
+        payload.password = password;
+      }
+      await apiFetch(`/panel/users/${username}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      showToast("Usuario actualizado correctamente.");
+    }
+    $("tabUserFormCard").style.display = "none";
+    await cargarUsuariosPanelTab();
+  } catch(e) {
+    errBox.textContent = e.message;
+    errBox.style.display = "block";
+  }
+});
+
+
+/* ---------------- TAB 3: SESIONES ACTIVAS ---------------- */
+
+async function cargarSesionesActivas() {
+  try {
+    const sessions = await apiFetch("/panel/sessions");
+    const tbody = $("sesionesTableBody");
+    tbody.innerHTML = "";
+    
+    if (!sessions || sessions.length === 0) {
+      $("emptySesionesMsg").style.display = "block";
+      return;
+    }
+    $("emptySesionesMsg").style.display = "none";
+    
+    sessions.forEach(s => {
+      const tr = document.createElement("tr");
+      tr.style.borderBottom = "1px solid var(--border)";
+      
+      const esPropio = s.username === USER.username;
+      const displayUser = esPropio ? `${s.username} <span style="color:var(--accent); font-weight:600; font-size:11px; margin-left:4px;">(Vos)</span>` : s.username;
+      
+      let uaFriendly = s.user_agent;
+      if (s.user_agent.includes("Chrome/")) {
+        uaFriendly = "Chrome";
+        if (s.user_agent.includes("Windows")) uaFriendly += " (Windows)";
+        else if (s.user_agent.includes("Macintosh")) uaFriendly += " (macOS)";
+        else if (s.user_agent.includes("Linux")) uaFriendly += " (Linux)";
+      } else if (s.user_agent.includes("Firefox/")) {
+        uaFriendly = "Firefox";
+        if (s.user_agent.includes("Windows")) uaFriendly += " (Windows)";
+        else if (s.user_agent.includes("Linux")) uaFriendly += " (Linux)";
+      } else if (s.user_agent.includes("Safari/") && !s.user_agent.includes("Chrome/")) {
+        uaFriendly = "Safari";
+        if (s.user_agent.includes("iPhone")) uaFriendly += " (iPhone)";
+      }
+      
+      let lastActStr = "Recién";
+      try {
+        const diff = Math.floor((new Date() - new Date(s.last_active)) / 1000);
+        if (diff > 60) {
+          const mins = Math.floor(diff / 60);
+          if (mins > 60) {
+            lastActStr = `Hace ${Math.floor(mins / 60)}h`;
+          } else {
+            lastActStr = `Hace ${mins} min`;
+          }
+        } else if (diff > 5) {
+          lastActStr = `Hace ${diff}s`;
+        }
+      } catch(e) {}
+      
+      tr.innerHTML = `
+        <td style="padding: 12px; font-weight: 600;">${displayUser}</td>
+        <td style="padding: 12px;"><span class="badge ${s.role.includes('superadmin') ? 'badge-activa' : 'badge-expirada'}">${s.role}</span></td>
+        <td style="padding: 12px; font-family: monospace; font-size:12px;">${s.ip}</td>
+        <td style="padding: 12px; font-size: 12px; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${s.user_agent}">${uaFriendly}</td>
+        <td style="padding: 12px; font-size: 12px;">${lastActStr}</td>
+        <td style="padding: 12px; text-align: center;">
+          ${esPropio ? '' : `<button class="btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="revocarSesion('${s.username}')">Desconectar</button>`}
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch(e) {
+    showToast("Error al cargar sesiones activas: " + e.message, true);
+  }
+}
+
+window.revocarSesion = function(username) {
+  customConfirm({
+    title: "Revocar Sesión",
+    message: `¿Estás seguro de desconectar forzadamente al usuario "${username}"? Se le cerrará la sesión de forma inmediata.`,
+    onAccept: async () => {
+      try {
+        await apiFetch(`/panel/sessions/${username}/revoke`, { method: "POST" });
+        showToast(`Sesión de "${username}" revocada correctamente.`);
+        await cargarSesionesActivas();
+      } catch(e) {
+        showToast(e.message, true);
+      }
+    }
+  });
+};
+
+$("btnRefrescarSesiones").addEventListener("click", cargarSesionesActivas);
+
+
+/* ---------------- TAB 4: LOGS DE AUDITORÍA ---------------- */
+let allLogs = [];
+
+async function cargarLogsAuditoria() {
+  try {
+    const limit = $("filtroLimiteLogs").value;
+    allLogs = await apiFetch(`/panel/logs?limite=${limit}`);
+    renderLogs();
+  } catch(e) {
+    showToast("Error al cargar logs de auditoría: " + e.message, true);
+  }
+}
+
+function renderLogs() {
+  const tbody = $("logsTableBody");
+  tbody.innerHTML = "";
+  
+  const searchVal = $("buscarLogs").value.toLowerCase().trim();
+  const filtered = allLogs.filter(log => {
+    if (!searchVal) return true;
+    return (
+      (log.usuario && log.usuario.toLowerCase().includes(searchVal)) ||
+      (log.accion && log.accion.toLowerCase().includes(searchVal)) ||
+      (log.detalles && log.detalles.toLowerCase().includes(searchVal))
+    );
+  });
+  
+  if (filtered.length === 0) {
+    $("emptyLogsMsg").style.display = "block";
+    return;
+  }
+  $("emptyLogsMsg").style.display = "none";
+  
+  filtered.forEach(log => {
+    const tr = document.createElement("tr");
+    tr.style.borderBottom = "1px solid var(--border)";
+    
+    let fechaStr = log.fecha || "";
+    try {
+      const d = new Date(log.fecha);
+      fechaStr = d.toLocaleString();
+    } catch(e) {}
+    
+    tr.innerHTML = `
+      <td style="padding: 10px; font-size: 12px; color: var(--muted); font-family: monospace; white-space: nowrap;">${fechaStr}</td>
+      <td style="padding: 10px; font-weight: 600;">${log.usuario || "sistema"}</td>
+      <td style="padding: 10px;"><span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--border); font-size:11px;">${log.accion || ""}</span></td>
+      <td style="padding: 10px; font-size: 12px; color: var(--muted);">${log.detalles || ""}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+$("btnRefrescarLogs").addEventListener("click", cargarLogsAuditoria);
+$("buscarLogs").addEventListener("input", renderLogs);
+$("filtroLimiteLogs").addEventListener("change", cargarLogsAuditoria);
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/panel/sw.js')
+      .then((reg) => console.log('Service Worker registrado con éxito:', reg.scope))
+      .catch((err) => console.error('Error al registrar el Service Worker:', err));
+  });
+}
+
+// Connection Status Monitor
+window.addEventListener('online', updateOnlineStatus);
+window.addEventListener('offline', updateOnlineStatus);
+
+function updateOnlineStatus() {
+  const isOnline = navigator.onLine;
+  const banner = $("offlineBanner");
+  if (banner) {
+    banner.style.display = isOnline ? "none" : "block";
+  }
+}
+// Initial check
+updateOnlineStatus();
 </script>
 </body>
 </html>
