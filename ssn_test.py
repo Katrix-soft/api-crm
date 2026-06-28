@@ -88,22 +88,119 @@ class PostgresCursorWrapper:
         is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
         has_returning = "RETURNING" in translated_sql.upper()
 
-        if is_insert and not has_returning:
-            try:
-                modified_sql = translated_sql + " RETURNING id"
-                self._cursor.execute(modified_sql, params or ())
-                res = self._cursor.fetchone()
-                if res:
-                    self.lastrowid = res[0]
-            except Exception:
+        sp_active = False
+        try:
+            self._cursor.execute("SAVEPOINT pg_exec_sp")
+            sp_active = True
+        except Exception:
+            pass
+
+        try:
+            if is_insert and not has_returning:
                 try:
-                    self.connection.rollback()
+                    modified_sql = translated_sql + " RETURNING id"
+                    self._cursor.execute(modified_sql, params or ())
+                    res = self._cursor.fetchone()
+                    if res:
+                        self.lastrowid = res[0]
+                except Exception:
+                    if sp_active:
+                        try:
+                            self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                        except Exception:
+                            pass
+                    self._cursor.execute(translated_sql, params or ())
+                    self.lastrowid = None
+            else:
+                self._cursor.execute(translated_sql, params or ())
+
+            if sp_active:
+                try:
+                    self._cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
                 except Exception:
                     pass
-                self._cursor.execute(translated_sql, params or ())
-                self.lastrowid = None
-        else:
-            self._cursor.execute(translated_sql, params or ())
+        except Exception as e:
+            if sp_active:
+                try:
+                    self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                except Exception:
+                    pass
+            err_str = str(e)
+            if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
+                raise sqlite3.OperationalError(err_str)
+            raise sqlite3.DatabaseError(err_str)
+
+        return self
+
+    def executemany(self, sql, seq_of_parameters):
+        if sql.strip().upper().startswith("PRAGMA"):
+            return self
+
+        # Traducir ? a %s
+        translated_sql = sql.replace('?', '%s')
+
+        # Traducir tipos y funciones SQLite a Postgres
+        translated_sql = re.sub(
+            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
+            'SERIAL PRIMARY KEY', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r'(?i)\bDATETIME\b', 
+            'TIMESTAMP', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+
+        # Traducir INSERT OR IGNORE / INSERT OR REPLACE
+        if "INSERT OR IGNORE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "SOCIEDADES" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
+            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
+        elif "INSERT OR REPLACE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "PRODUCTORES_DETALLE" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
+            elif "PANEL_BIOMETRICS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (credential_id) DO UPDATE SET public_key=EXCLUDED.public_key, dispositivo_nombre=EXCLUDED.dispositivo_nombre, username=EXCLUDED.username"
+            elif "PANEL_SETTINGS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
+
+        sp_active = False
+        try:
+            self._cursor.execute("SAVEPOINT pg_exec_sp")
+            sp_active = True
+        except Exception:
+            pass
+
+        try:
+            self._cursor.executemany(translated_sql, seq_of_parameters)
+            if sp_active:
+                try:
+                    self._cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
+                except Exception:
+                    pass
+        except Exception as e:
+            if sp_active:
+                try:
+                    self._cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
+                except Exception:
+                    pass
+            err_str = str(e)
+            if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
+                raise sqlite3.OperationalError(err_str)
+            raise sqlite3.DatabaseError(err_str)
 
         return self
 
