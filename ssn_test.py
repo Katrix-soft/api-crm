@@ -47,17 +47,7 @@ class PostgresCursorWrapper:
         # Traducir ? a %s
         translated_sql = sql.replace('?', '%s')
 
-        # Traducir tipos y funciones SQLite a Postgres
-        translated_sql = re.sub(
-            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
-            'SERIAL PRIMARY KEY', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r'(?i)\bDATETIME\b', 
-            'TIMESTAMP', 
-            translated_sql
-        )
+        # Traducir funciones temporales primero para evitar que la traducción de DATETIME las rompa
         translated_sql = re.sub(
             r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
             'CURRENT_TIMESTAMP', 
@@ -66,6 +56,18 @@ class PostgresCursorWrapper:
         translated_sql = re.sub(
             r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
             'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+
+        # Traducir tipos SQLite a Postgres
+        translated_sql = re.sub(
+            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
+            'SERIAL PRIMARY KEY', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r'(?i)\bDATETIME\b', 
+            'TIMESTAMP', 
             translated_sql
         )
 
@@ -145,17 +147,7 @@ class PostgresCursorWrapper:
         # Traducir ? a %s
         translated_sql = sql.replace('?', '%s')
 
-        # Traducir tipos y funciones SQLite a Postgres
-        translated_sql = re.sub(
-            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
-            'SERIAL PRIMARY KEY', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r'(?i)\bDATETIME\b', 
-            'TIMESTAMP', 
-            translated_sql
-        )
+        # Traducir funciones temporales primero para evitar que la traducción de DATETIME las rompa
         translated_sql = re.sub(
             r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
             'CURRENT_TIMESTAMP', 
@@ -164,6 +156,18 @@ class PostgresCursorWrapper:
         translated_sql = re.sub(
             r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
             'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+
+        # Traducir tipos SQLite a Postgres
+        translated_sql = re.sub(
+            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
+            'SERIAL PRIMARY KEY', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r'(?i)\bDATETIME\b', 
+            'TIMESTAMP', 
             translated_sql
         )
 
