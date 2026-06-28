@@ -102,7 +102,11 @@ class PostgresCursorWrapper:
             pass
 
         try:
-            if is_insert and not has_returning:
+            # Solo agregamos RETURNING id si sabemos que la tabla tiene una columna id
+            # Tablas que NO tienen id: panel_settings, panel_users, panel_biometrics, productor_sociedad, permisos_visibilidad
+            skip_returning = any(t in translated_sql.upper() for t in ["PANEL_SETTINGS", "PANEL_USERS", "PANEL_BIOMETRICS", "PRODUCTOR_SOCIEDAD", "PERMISOS_VISIBILIDAD"])
+            
+            if is_insert and not has_returning and not skip_returning:
                 try:
                     modified_sql = translated_sql + " RETURNING id"
                     self._cursor.execute(modified_sql, params or ())
@@ -715,7 +719,7 @@ def inicializar_db():
             clave TEXT UNIQUE NOT NULL,
             cliente TEXT NOT NULL,
             dispositivo_id TEXT,
-            fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             fecha_expiracion TEXT NOT NULL,
             estado TEXT DEFAULT 'activa',
             limite_dispositivos INTEGER DEFAULT 1
