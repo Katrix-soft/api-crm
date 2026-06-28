@@ -14,11 +14,168 @@ import sys
 import os
 import sqlite3
 from typing import Optional, List, Dict, Any
-# Optimize SQLite for minimal resource usage, WAL mode, memory temp store, cache size limiting.
+
+# ─── COMPATIBILIDAD DINÁMICA CON POSTGRESQL ───────────────────────────────────
+DATABASE_URL = os.environ.get("DATABASE_URL")
+psycopg2 = None
+if DATABASE_URL:
+    try:
+        import psycopg2
+    except ImportError:
+        pass
+
+class DictRow(dict):
+    def __init__(self, row, keys):
+        super().__init__(zip(keys, row))
+        self._row = row
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._row[key]
+        return super().__getitem__(key)
+
+class PostgresCursorWrapper:
+    def __init__(self, pg_cursor, connection):
+        self._cursor = pg_cursor
+        self.connection = connection
+        self.lastrowid = None
+        self._row_factory = None
+
+    def execute(self, sql, params=None):
+        if sql.strip().upper().startswith("PRAGMA"):
+            return self
+
+        # Traducir ? a %s
+        translated_sql = sql.replace('?', '%s')
+
+        # Traducir tipos y funciones SQLite a Postgres
+        translated_sql = re.sub(
+            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
+            'SERIAL PRIMARY KEY', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r'(?i)\bDATETIME\b', 
+            'TIMESTAMP', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+
+        # Traducir INSERT OR IGNORE / INSERT OR REPLACE
+        if "INSERT OR IGNORE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "SOCIEDADES" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
+            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
+        elif "INSERT OR REPLACE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "PRODUCTORES_DETALLE" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
+            elif "PANEL_BIOMETRICS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (credential_id) DO UPDATE SET public_key=EXCLUDED.public_key, dispositivo_nombre=EXCLUDED.dispositivo_nombre, username=EXCLUDED.username"
+            elif "PANEL_SETTINGS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
+
+        is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
+        has_returning = "RETURNING" in translated_sql.upper()
+
+        if is_insert and not has_returning:
+            try:
+                modified_sql = translated_sql + " RETURNING id"
+                self._cursor.execute(modified_sql, params or ())
+                res = self._cursor.fetchone()
+                if res:
+                    self.lastrowid = res[0]
+            except Exception:
+                try:
+                    self.connection.rollback()
+                except Exception:
+                    pass
+                self._cursor.execute(translated_sql, params or ())
+                self.lastrowid = None
+        else:
+            self._cursor.execute(translated_sql, params or ())
+
+        return self
+
+    def fetchone(self):
+        try:
+            row = self._cursor.fetchone()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        keys = [desc[0] for desc in self._cursor.description]
+        if self._row_factory or getattr(self.connection, 'row_factory', None):
+            return DictRow(row, keys)
+        return row
+
+    def fetchall(self):
+        try:
+            rows = self._cursor.fetchall()
+        except Exception:
+            return []
+        keys = [desc[0] for desc in self._cursor.description]
+        if self._row_factory or getattr(self.connection, 'row_factory', None):
+            return [DictRow(row, keys) for row in rows]
+        return rows
+
+    def close(self):
+        self._cursor.close()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+class PostgresConnectionWrapper:
+    def __init__(self, pg_conn):
+        self._conn = pg_conn
+        self.row_factory = None
+
+    def cursor(self):
+        cursor = self._conn.cursor()
+        return PostgresCursorWrapper(cursor, self)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
 _wal_initialized = False
 _orig_sqlite_connect = sqlite3.connect
+
 def _custom_sqlite_connect(*args, **kwargs):
     global _wal_initialized
+    if DATABASE_URL and psycopg2:
+        try:
+            pg_conn = psycopg2.connect(DATABASE_URL)
+            return PostgresConnectionWrapper(pg_conn)
+        except Exception as e:
+            print(f"Error conectando a Postgres (DATABASE_URL), cayendo a SQLite: {e}")
+
     if "timeout" not in kwargs:
         kwargs["timeout"] = 30.0
     conn = _orig_sqlite_connect(*args, **kwargs)
@@ -26,15 +183,13 @@ def _custom_sqlite_connect(*args, **kwargs):
         if not _wal_initialized:
             conn.execute("PRAGMA journal_mode = WAL;")
             _wal_initialized = True
-        # NORMAL synchronous mode is faster and safe in WAL mode
         conn.execute("PRAGMA synchronous = NORMAL;")
-        # Store temp tables in memory to avoid disk access
         conn.execute("PRAGMA temp_store = MEMORY;")
-        # Limit memory cache to ~2MB to keep RAM footprint low when compiled to .exe
         conn.execute("PRAGMA cache_size = -2000;")
     except Exception:
         pass
     return conn
+
 sqlite3.connect = _custom_sqlite_connect
 import csv
 import secrets

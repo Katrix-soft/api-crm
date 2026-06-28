@@ -4,6 +4,7 @@ Esta guía documenta la arquitectura, el flujo de autenticación, el sistema de 
 
 ---
 
+
 ## 1. Arquitectura y Roles (RBAC)
 
 La API REST está construida con **FastAPI** y protegida mediante **JWT** (JSON Web Tokens). Centraliza la lógica relacional en una base de datos SQLite (`productores_scraped.db`) utilizando transacciones en modo WAL.
@@ -45,12 +46,18 @@ Para evitar perder los datos y usuarios registrados cada vez que el contenedor s
 ### Paso 4: Redes y Puertos
 - Configura el **App Port** en `8000`. Easypanel creará el certificado SSL (HTTPS) de forma automática.
 
-### Paso 5: Variables de Entorno
+### Paso 5: Variables de Entorno y Base de Datos (PostgreSQL / SQLite)
+La API soporta de forma dinámica tanto **SQLite** (por defecto) como **PostgreSQL** para la persistencia.
+
+Si querés usar **PostgreSQL** (altamente recomendado en producción), simplemente agregá la variable `DATABASE_URL` en la configuración de la App. La API detectará el motor, creará las tablas y sembrará los usuarios por defecto (`kadmin` y `nicodev`) de manera automática.
+
 Agregá las siguientes variables en la pestaña **Environment**:
 ```env
 KATRIX_SECRET_KEY=clave-super-secreta-de-64-caracteres-para-jwt
 TOKEN_EXPIRE_HOURS=24
 KATRIX_CORS_ORIGINS=*
+# Para usar PostgreSQL (producción):
+DATABASE_URL=postgresql://postgres:Nachax5$@vps-katrix_postgres:5432/vps-katrix
 ```
 
 ---
