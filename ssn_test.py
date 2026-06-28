@@ -40,6 +40,9 @@ class PostgresCursorWrapper:
         self.lastrowid = None
         self._row_factory = None
 
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
     def execute(self, sql, params=None):
         if sql.strip().upper().startswith("PRAGMA"):
             return self
