@@ -1,10 +1,11 @@
-const CACHE_NAME = 'katrix-panel-cache-v1';
+const CACHE_NAME = 'katrix-panel-cache-v2';
 const ASSETS = [
   '/panel',
   '/panel/katrix-biometrics.js',
   '/panel/manifest.json',
   '/panel/icon-192.png',
-  '/panel/icon-512.png'
+  '/panel/icon-512.png',
+  '/panel/chill_bg.png'
 ];
 
 // Install Event - Precache Assets
