@@ -746,7 +746,7 @@ def inicializar_db():
     
     # Asegurar columna username en panel_biometrics si ya existía la tabla
     try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
     except sqlite3.OperationalError:
         pass
 
@@ -3582,7 +3582,7 @@ def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nom
     cursor = conn.cursor()
     # Asegurar columna username
     try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -3599,7 +3599,7 @@ def obtener_panel_biometric(credential_id: str) -> dict:
     cursor = conn.cursor()
     # Asegurar columna username
     try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -3621,7 +3621,7 @@ def obtener_todos_panel_biometrics() -> list:
     cursor = conn.cursor()
     # Asegurar columna username
     try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN username TEXT")
+        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass
