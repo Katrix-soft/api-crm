@@ -148,6 +148,41 @@
     border:1px solid var(--border); border-radius:10px; padding:12px 16px;
     font-size:13px; display:none; z-index:60; max-width:320px;
   }
+
+  /* ---- GitBook Style ---- */
+  .gitbook-container {
+    display: flex; gap: 24px; align-items: flex-start;
+  }
+  .gb-sidebar {
+    width: 240px; flex-shrink: 0; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; position: sticky; top: 20px;
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  }
+  .gb-sidebar h3 { font-size: 14px; margin-top: 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .gb-sidebar ul { list-style: none; padding: 0; margin: 0; }
+  .gb-sidebar li { margin-bottom: 6px; }
+  .gb-sidebar a { color: var(--text); text-decoration: none; font-size: 14px; display: block; padding: 8px 10px; border-radius: 6px; transition: all 0.2s; }
+  .gb-sidebar a:hover { background: var(--panel2); color: var(--accent); }
+  
+  .gb-content {
+    flex: 1; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 40px;
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  }
+  .gb-content h2 { font-size: 22px; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: 0; margin-bottom: 24px; letter-spacing: -0.5px; }
+  .gb-content h2:not(:first-child) { margin-top: 48px; }
+  .gb-content p { font-size: 15px; line-height: 1.7; color: var(--text); margin-bottom: 20px; }
+  .gb-content ul, .gb-content ol { font-size: 15px; color: var(--text); line-height: 1.7; padding-left: 24px; margin-bottom: 24px; }
+  .gb-content li { margin-bottom: 10px; }
+  .gb-content strong { color: var(--accent); font-weight: 600; }
+  
+  .install-card {
+    background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;
+  }
+  :root[data-theme="light"] .install-card { background: rgba(0,0,0,0.03); }
+  .install-card h3 { margin-top: 0; font-size: 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .install-card ol { margin-bottom: 0; }
+
   /* ---- Tabs Navigation ---- */
   .tabs-nav {
     display: flex; gap: 12px; margin-bottom: 24px;
@@ -183,6 +218,10 @@
     .login-card h1 { font-size: 20px; }
     .modal { padding: 24px; }
     #dashboard { padding: 16px 10px; }
+    
+    .gitbook-container { flex-direction: column; }
+    .gb-sidebar { width: 100%; position: static; margin-bottom: 16px; }
+    .gb-content { padding: 24px; }
   }
   @media (max-width:480px){
     .stats { grid-template-columns: 1fr; }
@@ -250,6 +289,7 @@
     <button class="tab-btn" id="navTabUsers" data-tab="tab-usuarios" style="display:none;">👥 Usuarios</button>
     <button class="tab-btn" id="navTabSesiones" data-tab="tab-sesiones" style="display:none;">🌐 Sesiones Activas</button>
     <button class="tab-btn" id="navTabLogs" data-tab="tab-logs" style="display:none;">📋 Logs de Auditoría</button>
+    <button class="tab-btn" id="navTabGuia" data-tab="tab-guia">📚 Guía de Uso</button>
   </div>
 
   <!-- Tab 1: Licencias -->
@@ -435,6 +475,72 @@
         </tbody>
       </table>
       <p class="empty" id="emptyLogsMsg" style="display:none;">No se encontraron logs.</p>
+    </div>
+  </div>
+
+  <!-- Tab 5: Guía de Uso -->
+  <div id="tab-guia" class="tab-content">
+    <div class="gitbook-container">
+      <div class="gb-sidebar">
+        <h3>Índice</h3>
+        <ul id="gb-nav">
+          <li><a href="#gb-intro" onclick="event.preventDefault(); document.getElementById('gb-intro').scrollIntoView({behavior: 'smooth'})">Introducción al Panel</a></li>
+          <li><a href="#gb-licencias" onclick="event.preventDefault(); document.getElementById('gb-licencias').scrollIntoView({behavior: 'smooth'})">Gestión de Licencias</a></li>
+          <li><a href="#gb-usuarios" onclick="event.preventDefault(); document.getElementById('gb-usuarios').scrollIntoView({behavior: 'smooth'})">Usuarios y Permisos</a></li>
+          <li><a href="#gb-install" onclick="event.preventDefault(); document.getElementById('gb-install').scrollIntoView({behavior: 'smooth'})">📱 Instalar en Dispositivos</a></li>
+        </ul>
+      </div>
+      <div class="gb-content">
+        <h2 id="gb-intro">Introducción al Panel</h2>
+        <p>Bienvenido al Panel de Administración de Katrix ERP/CRM. Desde aquí puedes controlar el acceso, gestionar licencias de clientes, visualizar sesiones activas y auditar la actividad del sistema.</p>
+        
+        <h2 id="gb-licencias">Gestión de Licencias</h2>
+        <p>En la pestaña <strong>Licencias</strong> puedes visualizar y controlar las instalaciones activas del software:</p>
+        <ul>
+          <li><strong>Crear nuevas licencias:</strong> Define el nombre del cliente, producto (CRM, ERP, POS), fecha de vencimiento y el límite de dispositivos simultáneos permitidos.</li>
+          <li><strong>Suspender/Activar:</strong> Pausa el acceso de un cliente sin eliminar su registro de la base de datos.</li>
+          <li><strong>Desvincular Dispositivos:</strong> Si un cliente excede su límite o cambia de PC, puedes desvincular sus equipos anteriores para liberar el cupo, forzando un cierre de sesión en ese equipo.</li>
+        </ul>
+
+        <h2 id="gb-usuarios">Usuarios y Permisos (Solo Superadmin)</h2>
+        <p>Los superadministradores pueden crear nuevos usuarios para el panel (como vendedores o soporte). Cada usuario puede tener permisos granulares (por ejemplo, permitirles solo ver licencias, pero bloquear la capacidad de suspender o eliminar).</p>
+
+        <h2 id="gb-install">📱 Instalación de la App (PWA)</h2>
+        <p>Este Panel funciona como una PWA (Progressive Web App). Puedes instalarla como una aplicación nativa en tu celular, tablet o PC de escritorio para tener un ícono dedicado, mayor pantalla, e iniciar sesión de forma ultra-rápida utilizando el sensor de huella dactilar (biometría).</p>
+        
+        <div class="install-card">
+          <h3>🤖 En Android</h3>
+          <ol>
+            <li>Abre el panel en el navegador <strong>Google Chrome</strong>.</li>
+            <li>Inicia sesión con tu usuario y contraseña (recomendamos tildar "Recordar").</li>
+            <li>Toca el botón superior que dice <strong>"📱 Instalar App"</strong> o abre el menú de Chrome (los tres puntos arriba a la derecha).</li>
+            <li>Selecciona <strong>"Instalar aplicación"</strong> o "Agregar a la pantalla principal".</li>
+            <li>Sigue las instrucciones en pantalla. ¡Listo! La app estará en tu cajón de aplicaciones.</li>
+          </ol>
+        </div>
+
+        <div class="install-card">
+          <h3>🍏 En iOS (iPhone / iPad)</h3>
+          <ol>
+            <li>Abre el panel en el navegador <strong>Safari</strong> (esto no funciona en Chrome para iOS).</li>
+            <li>Inicia sesión normalmente.</li>
+            <li>Toca el ícono de <strong>Compartir</strong> (el cuadrado con la flecha hacia arriba) en la barra de herramientas inferior de Safari.</li>
+            <li>Desliza hacia abajo las opciones grises y toca <strong>"Agregar a Inicio"</strong> (Add to Home Screen).</li>
+            <li>Confirma tocando "Agregar". El panel ahora aparecerá como una app más en tu pantalla de inicio del iPhone.</li>
+          </ol>
+        </div>
+        
+        <div class="install-card">
+          <h3>💻 En PC (Windows / Mac)</h3>
+          <ol>
+            <li>Abre el panel en <strong>Google Chrome</strong> o <strong>Microsoft Edge</strong>.</li>
+            <li>Al final de la barra de direcciones (donde escribes la URL), verás un pequeño ícono de un <strong>monitor con una flecha hacia abajo</strong>.</li>
+            <li>Haz clic ahí y selecciona "Instalar".</li>
+            <li>La app se abrirá en su propia ventana y se añadirá a tu barra de tareas o dock.</li>
+          </ol>
+        </div>
+        
+      </div>
     </div>
   </div>
 </div>
