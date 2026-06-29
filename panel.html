@@ -12,6 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   :root{
     --bg:#0f1115; --panel:rgba(22, 25, 34, 0.6); --panel2:rgba(29, 33, 44, 0.5); --border:rgba(255, 255, 255, 0.1);
@@ -126,6 +127,22 @@
   .clave{ font-family: 'Inter', monospace; font-size:13px; background: var(--panel2); padding: 4px 8px; border-radius: 6px; letter-spacing: 1px; }
   .empty{ text-align:center; color:var(--muted); padding:40px 0; font-size: 15px; }
 
+  /* ---- Skeletons ---- */
+  @keyframes shimmer { 0% { background-position: -468px 0; } 100% { background-position: 468px 0; } }
+  .skeleton {
+    background: var(--panel2);
+    background-image: linear-gradient(to right, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.1) 20%, rgba(255,255,255,0.05) 40%, rgba(255,255,255,0.05) 100%);
+    background-repeat: no-repeat; background-size: 800px 100%; 
+    animation: shimmer 1.5s infinite linear forwards;
+    border-radius: 4px; height: 16px; margin-bottom: 6px;
+  }
+  :root[data-theme="light"] .skeleton {
+    background-image: linear-gradient(to right, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.1) 20%, rgba(0,0,0,0.05) 40%, rgba(0,0,0,0.05) 100%);
+  }
+  .charts-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; backdrop-filter: var(--glass-blur); }
+  #bulkActions { display: none; align-items: center; gap: 12px; background: var(--panel2); padding: 12px 16px; border-radius: var(--radius); border: 1px dashed var(--accent); margin-bottom: 16px; }
+
   /* ---- Modal ---- */
   .modal-overlay{
     display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7);
@@ -212,6 +229,7 @@
     .tabs-nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
     .tab-btn { padding: 10px 12px; font-size: 13px; }
     .stats { grid-template-columns: 1fr 1fr; gap: 12px; }
+    .charts-wrap { grid-template-columns: 1fr; }
     .stat { padding: 16px; }
     .stat .value { font-size: 24px; }
     .login-card { padding: 24px; }
@@ -274,6 +292,7 @@
     </div>
     <div style="display:flex; gap:8px;">
       <button class="btn-ghost" id="btnManageUsers" style="display:none;">👥 Usuarios</button>
+      <button class="btn-ghost" id="btnPushAlerts">🔔 Activar Alertas</button>
       <button class="btn-ghost" id="btnChangePass" style="display:none;">🔐 Cambiar Clave Panel</button>
       <button class="btn-ghost" id="btnRegBio" style="display:none;">👤 Registrar Huella</button>
       <button class="btn-primary" id="btnInstallApp" style="display:none;">📱 Instalar App</button>
@@ -301,6 +320,11 @@
       <div class="stat"><div class="label">Total</div><div class="value" id="statTotal">0</div></div>
     </div>
 
+    <div class="charts-wrap">
+      <div class="chart-box"><canvas id="chartExp"></canvas></div>
+      <div class="chart-box"><canvas id="chartProd"></canvas></div>
+    </div>
+
     <div class="toolbar">
       <input type="text" id="buscar" placeholder="Buscar por cliente, email o clave..." />
       <select id="filtroEstado">
@@ -320,9 +344,17 @@
     </div>
 
     <div class="table-wrap">
+      <div id="bulkActions">
+        <span style="font-size:13px; font-weight:500;" id="bulkCount">0 seleccionadas</span>
+        <button class="btn-warn" id="btnBulkSuspender">Suspender</button>
+        <button class="btn-ok" id="btnBulkActivar">Reactivar</button>
+        <button class="btn-primary" id="btnBulkExtender">+30 Días</button>
+      </div>
+
       <table>
         <thead>
           <tr>
+            <th style="width:30px;"><input type="checkbox" id="chkSelectAll" /></th>
             <th>Cliente</th>
             <th>Clave</th>
             <th>Producto</th>
@@ -684,6 +716,9 @@ let API_BASE = "";
 let TOKEN = "";
 let USER = null;
 let licencias = [];
+let chartExpInstance = null;
+let chartProdInstance = null;
+let offlineQueue = JSON.parse(localStorage.getItem('katrix_offline_queue') || '[]');
 
 const $ = (id) => document.getElementById(id);
 
@@ -740,13 +775,66 @@ async function apiFetch(path, options = {}){
           currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
           document.documentElement.setAttribute('data-theme', currentTheme);
           localStorage.setItem('theme', currentTheme);
+          renderCharts(); // Update charts colors
       });
     }
   });
+  
+  // -----------------------------------------------------------
+  // LÓGICA BACKGROUND SYNC (MANUAL POLYFILL / OFFLINE)
+  // -----------------------------------------------------------
+  window.addEventListener('online', async () => {
+    $("offlineBanner").style.display = "none";
+    if (offlineQueue.length > 0) {
+      showToast(`Sincronizando ${offlineQueue.length} acciones pendientes...`);
+      for (const task of offlineQueue) {
+        try {
+          await fetch(API_BASE + task.url, {
+            method: task.method,
+            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN },
+            body: JSON.stringify(task.body)
+          });
+        } catch(e) { console.warn("Failed sync task", e); }
+      }
+      offlineQueue = [];
+      localStorage.setItem('katrix_offline_queue', '[]');
+      cargarLicencias();
+      showToast("¡Sincronización completada!", false);
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    $("offlineBanner").style.display = "block";
+  });
+
+  async function apiFetchWrapper(path, options = {}) {
+    if (!navigator.onLine && (options.method === 'PUT' || options.method === 'POST' || options.method === 'DELETE')) {
+      offlineQueue.push({ url: path, method: options.method, body: JSON.parse(options.body) });
+      localStorage.setItem('katrix_offline_queue', JSON.stringify(offlineQueue));
+      showToast("Sin conexión. Acción guardada para sincronizar luego.", true);
+      return;
+    }
+    return apiFetch(path, options);
+  }
 
   // -----------------------------------------------------------
-  // LÓGICA DE INSTALACIÓN PWA (Android e iOS)
+  // LÓGICA DE INSTALACIÓN PWA Y ACTUALIZACIONES
   // -----------------------------------------------------------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/panel/sw.js').then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // Se encontró una versión nueva del Service Worker
+            showToast("Nueva versión disponible. Actualizando...", false);
+            setTimeout(() => window.location.reload(), 1500);
+          }
+        });
+      });
+    });
+  }
+
   let deferredPrompt;
   const btnInstallApp = document.getElementById('btnInstallApp');
 
@@ -1160,6 +1248,18 @@ function diasRestantes(fechaISO){
 }
 
 async function cargarLicencias(){
+  const body = $("tablaBody");
+  // Skeleton loaders
+  body.innerHTML = Array(5).fill(0).map(() => `<tr>
+    <td><div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:50%; height:10px;"></div></td>
+    <td><div class="skeleton" style="width:80%"></div></td>
+    <td><div class="skeleton" style="width:40%"></div></td>
+    <td><div class="skeleton" style="width:60%"></div></td>
+    <td><div class="skeleton" style="width:40%"></div></td>
+    <td><div class="skeleton" style="width:50%"></div></td>
+    <td><div class="skeleton" style="width:100%"></div></td>
+  </tr>`).join("");
+
   try{
     licencias = await apiFetch("/licencias/");
     localStorage.setItem("katrix_cached_licencias", JSON.stringify(licencias));
@@ -1211,6 +1311,8 @@ function render(){
     return matchQ && matchE && matchP;
   });
 
+  renderCharts();
+
   $("statActivas").textContent = licencias.filter(l=>l.estado==="activa").length;
   $("statPorVencer").textContent = licencias.filter(l=>l.estado==="activa" && diasRestantes(l.fecha_expiracion) <= 15 && diasRestantes(l.fecha_expiracion) >= 0).length;
   $("statSuspendidas").textContent = licencias.filter(l=>l.estado==="suspendida").length;
@@ -1238,6 +1340,7 @@ function render(){
     const cantDisp = dispositivos.length;
 
     tr.innerHTML = `
+      <td><input type="checkbox" class="chkRow" value="${l.id}" /></td>
       <td>
         <div style="font-weight:600;">${l.cliente}</div>
         <div style="font-size:12px; color:var(--muted);">${l.email_cliente || ""}</div>
@@ -1275,6 +1378,134 @@ function render(){
 $("buscar").addEventListener("input", render);
 $("filtroEstado").addEventListener("change", render);
 $("filtroProducto").addEventListener("change", render);
+
+function renderCharts() {
+  const isDark = document.documentElement.getAttribute("data-theme") !== "light";
+  const textColor = isDark ? "#e7e9ee" : "#0f172a";
+  const gridColor = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
+
+  // Expiring chart (Bar)
+  const expiringData = { "Vencidas": 0, "0-15 días": 0, "16-30 días": 0, "+30 días": 0 };
+  licencias.filter(l => l.estado === "activa").forEach(l => {
+    const d = diasRestantes(l.fecha_expiracion);
+    if (d < 0) expiringData["Vencidas"]++;
+    else if (d <= 15) expiringData["0-15 días"]++;
+    else if (d <= 30) expiringData["16-30 días"]++;
+    else expiringData["+30 días"]++;
+  });
+
+  if (chartExpInstance) chartExpInstance.destroy();
+  chartExpInstance = new Chart($("chartExp"), {
+    type: 'bar',
+    data: {
+      labels: Object.keys(expiringData),
+      datasets: [{
+        label: 'Licencias Activas por Vencimiento',
+        data: Object.values(expiringData),
+        backgroundColor: ['#ef4444', '#f59e0b', '#10b981', '#3b82f6'],
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1 } },
+        x: { grid: { display: false }, ticks: { color: textColor } }
+      },
+      plugins: { legend: { labels: { color: textColor } } }
+    }
+  });
+
+  // Products chart (Doughnut)
+  const prodData = {};
+  licencias.forEach(l => {
+    const p = l.producto || "CRM";
+    prodData[p] = (prodData[p] || 0) + 1;
+  });
+
+  if (chartProdInstance) chartProdInstance.destroy();
+  chartProdInstance = new Chart($("chartProd"), {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(prodData),
+      datasets: [{
+        data: Object.values(prodData),
+        backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { position: 'right', labels: { color: textColor } }
+      }
+    }
+  });
+}
+
+// BULK ACTIONS
+function updateBulkUI() {
+  const checked = document.querySelectorAll(".chkRow:checked");
+  $("bulkActions").style.display = checked.length > 0 ? "flex" : "none";
+  $("bulkCount").textContent = checked.length + " seleccionadas";
+  $("chkSelectAll").checked = checked.length > 0 && checked.length === document.querySelectorAll(".chkRow").length;
+}
+
+$("chkSelectAll").addEventListener("change", (e) => {
+  document.querySelectorAll(".chkRow").forEach(chk => chk.checked = e.target.checked);
+  updateBulkUI();
+});
+
+$("tablaBody").addEventListener("change", (e) => {
+  if (e.target.classList.contains("chkRow")) updateBulkUI();
+});
+
+async function bulkUpdate(action) {
+  const ids = Array.from(document.querySelectorAll(".chkRow:checked")).map(chk => Number(chk.value));
+  if (!ids.length) return;
+  const msg = action === 'suspender' ? 'suspender' : (action === 'activar' ? 'reactivar' : 'extender 30 días a');
+  
+  customConfirm({
+    title: "Acción Masiva",
+    message: `¿Estás seguro de que querés ${msg} las ${ids.length} licencias seleccionadas?`,
+    onAccept: async () => {
+      showToast("Procesando acción masiva...");
+      let errors = 0;
+      for (const id of ids) {
+        const lic = licencias.find(l => l.id === id);
+        if (!lic) continue;
+        let payload = {
+          cliente: lic.cliente,
+          fecha_expiracion: lic.fecha_expiracion,
+          estado: lic.estado,
+          limite_dispositivos: lic.limite_dispositivos,
+          dispositivo_id: lic.dispositivo_id || null,
+          motivo: lic.motivo || null,
+          dispositivos_info: lic.dispositivos_info || null
+        };
+        
+        if (action === 'suspender') { payload.estado = 'suspendida'; payload.motivo = 'Acción masiva'; }
+        if (action === 'activar') { payload.estado = 'activa'; payload.motivo = null; }
+        if (action === 'extender') {
+           const d = new Date(lic.fecha_expiracion + "T00:00:00");
+           d.setDate(d.getDate() + 30);
+           payload.fecha_expiracion = d.toISOString().split("T")[0];
+        }
+        
+        try {
+          // Use apiFetchWrapper for offline support
+          await apiFetchWrapper(`/licencias/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } catch(e) { errors++; }
+      }
+      showToast(`Acción finalizada. ${errors > 0 ? errors + ' fallaron.' : 'Todo OK.'}`);
+      cargarLicencias();
+    }
+  });
+}
+
+$("btnBulkSuspender").addEventListener("click", () => bulkUpdate("suspender"));
+$("btnBulkActivar").addEventListener("click", () => bulkUpdate("activar"));
+$("btnBulkExtender").addEventListener("click", () => bulkUpdate("extender"));
 
 /* ---------------- ACCIONES DE FILA ---------------- */
 
@@ -1953,6 +2184,18 @@ function updateOnlineStatus() {
 }
 // Initial check
 updateOnlineStatus();
+$("btnPushAlerts").addEventListener("click", async () => {
+  if (!('Notification' in window)) {
+    alert("Este navegador no soporta notificaciones.");
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    showToast("Notificaciones activadas.", false);
+  } else {
+    showToast("Permiso de notificaciones denegado.", true);
+  }
+});
 </script>
 </body>
 </html>

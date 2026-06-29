@@ -1,4 +1,4 @@
-const CACHE_NAME = 'katrix-panel-cache-v2';
+const CACHE_NAME = 'katrix-panel-cache-v3';
 const ASSETS = [
   '/panel',
   '/panel/katrix-biometrics.js',
@@ -62,6 +62,50 @@ self.addEventListener('fetch', (event) => {
 
         return cachedResponse || fetchedResponse;
       });
+    })
+  );
+});
+
+// Push Event - Web Push API
+self.addEventListener('push', (event) => {
+  let data = { title: 'Notificación', body: 'Nueva notificación', icon: '/panel/icon-192.png' };
+  try {
+    if (event.data) {
+      data = event.data.json();
+    }
+  } catch(e) {
+    console.warn("Invalid push data");
+  }
+
+  const options = {
+    body: data.body,
+    icon: data.icon || '/panel/icon-192.png',
+    badge: '/panel/icon-192.png',
+    vibrate: [100, 50, 100],
+    data: data.url || '/panel'
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
+});
+
+// Notification Click Event
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window' }).then(windowClients => {
+      // Check if there is already a window/tab open with the target URL
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url === event.notification.data && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // If not, open a new window
+      if (clients.openWindow) {
+        return clients.openWindow(event.notification.data);
+      }
     })
   );
 });
