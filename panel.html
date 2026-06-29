@@ -730,6 +730,14 @@ function hasPerm(permission) {
   return USER.permissions[permission] !== false;
 }
 
+function copiarClave(texto) {
+  navigator.clipboard.writeText(texto).then(() => {
+    showToast('Clave copiada', false);
+  }).catch(() => {
+    showToast('No se pudo copiar', true);
+  });
+}
+
 function showToast(msg, isError){
   const t = $("toast");
   t.textContent = msg;
@@ -1345,8 +1353,13 @@ function render(){
         <div style="font-weight:600;">${l.cliente}</div>
         <div style="font-size:12px; color:var(--muted);">${l.email_cliente || ""}</div>
       </td>
-      <td class="clave">${l.clave}</td>
-      <td>${l.producto || "-"}</td>
+      <td class="clave">
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${l.clave}
+          <button title="Copiar clave" style="background:transparent; border:none; cursor:pointer; font-size:14px; padding:0; filter:grayscale(1); opacity:0.7; transition:0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7" onclick="copiarClave('${l.clave}')">📋</button>
+        </div>
+      </td>
+      <td><span class="badge" style="background:rgba(79, 70, 229, 0.2); color:#818cf8; border:1px solid rgba(79, 70, 229, 0.4);">${l.producto || "CRM"}</span></td>
       <td>${venceTxt}${dias>=0 && dias<=15 ? ` <span style="color:var(--amber); font-size:11px;">(${dias}d)</span>` : ""}</td>
       <td>
         <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; cursor: pointer; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="mostrarDispositivos(${l.id})">
