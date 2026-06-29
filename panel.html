@@ -198,6 +198,7 @@
       <button class="btn-ghost" id="btnChangePass" style="display:none;">🔐 Cambiar Clave Panel</button>
       <button class="btn-ghost" id="btnRegBio" style="display:none;">👤 Registrar Huella</button>
       <button class="btn-primary" id="btnInstallApp" style="display:none;">📱 Instalar App</button>
+      <button class="btn-ghost" id="btnThemeToggle">🌓 Tema</button>
       <button class="btn-ghost" id="btnNueva"><span style="margin-right:6px;">+</span>Nueva licencia</button>
       <button class="btn-ghost" id="btnLogout">Salir</button>
     </div>
@@ -586,10 +587,15 @@ async function apiFetch(path, options = {}){
   let currentTheme = localStorage.getItem('theme') || 'dark';
   document.documentElement.setAttribute('data-theme', currentTheme);
   
-  document.getElementById('btnThemeToggle').addEventListener('click', () => {
-      currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', currentTheme);
-      localStorage.setItem('theme', currentTheme);
+  window.addEventListener('DOMContentLoaded', () => {
+    const btnTheme = document.getElementById('btnThemeToggle');
+    if (btnTheme) {
+      btnTheme.addEventListener('click', () => {
+          currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', currentTheme);
+          localStorage.setItem('theme', currentTheme);
+      });
+    }
   });
 
   // -----------------------------------------------------------
