@@ -305,7 +305,8 @@
   <!-- Navigation Tabs -->
   <div class="tabs-nav" style="margin-bottom:20px;">
     <button class="tab-btn active" data-tab="tab-licencias">🔑 Licencias</button>
-    <button class="tab-btn" id="navTabUsers" data-tab="tab-usuarios" style="display:none;">👥 Usuarios</button>
+    <button class="tab-btn" id="navTabUsers" data-tab="tab-usuarios" style="display:none;">👥 Usuarios Panel</button>
+    <button class="tab-btn" id="navTabCrmUsers" data-tab="tab-crm-usuarios" style="display:none;">📱 Usuarios App</button>
     <button class="tab-btn" id="navTabSesiones" data-tab="tab-sesiones" style="display:none;">🌐 Sesiones Activas</button>
     <button class="tab-btn" id="navTabLogs" data-tab="tab-logs" style="display:none;">📋 Logs de Auditoría</button>
     <button class="tab-btn" id="navTabGuia" data-tab="tab-guia">📚 Guía de Uso</button>
@@ -449,6 +450,59 @@
         <button class="btn-primary" id="btnSaveTabUser">Guardar Usuario</button>
       </div>
       <div id="tabUserError" style="color:var(--red); font-size:13px; margin-top:10px; display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Tab 2.5: Usuarios App (CRM) -->
+  <div id="tab-crm-usuarios" class="tab-content">
+    <div class="toolbar" style="justify-content: space-between; align-items: center; margin-bottom: 16px; display:flex;">
+      <div style="font-size: 14px; font-weight: 600; color: var(--accent);">Gestión de Usuarios de la App Flutter</div>
+      <button class="btn-primary" id="btnTabNewCrmUser" style="padding: 8px 14px; font-size: 13px;">+ Nuevo Usuario App</button>
+    </div>
+    
+    <div class="table-wrap" style="margin-bottom: 24px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Usuario</th>
+            <th>Email</th>
+            <th>Rol</th>
+            <th style="text-align: center;">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="tabCrmUsersTableBody">
+          <!-- Dinámico -->
+        </tbody>
+      </table>
+    </div>
+    
+    <!-- Formulario de Usuario CRM -->
+    <div id="tabCrmUserFormCard" style="display:none; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-top: 20px; max-width: 600px;">
+      <h3 id="tabCrmUserFormTitle" style="margin-top:0; margin-bottom:15px; font-size:16px;">Crear Usuario App</h3>
+      <div class="field">
+        <label>Nombre de Usuario</label>
+        <input id="tabCrmUserUsername" type="text" placeholder="Ej. juanperez" />
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input id="tabCrmUserEmail" type="email" placeholder="juan@ejemplo.com" />
+      </div>
+      <div class="field">
+        <label>Contraseña</label>
+        <input id="tabCrmUserPassword" type="password" placeholder="••••••••" />
+      </div>
+      <div class="field">
+        <label>Rol</label>
+        <select id="tabCrmUserRole">
+          <option value="agente">Agente / Vendedor</option>
+          <option value="admin">Administrador App</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+        <button class="btn-ghost" id="btnCancelTabCrmUserForm">Cancelar</button>
+        <button class="btn-primary" id="btnSaveTabCrmUser">Guardar Usuario</button>
+      </div>
+      <div id="tabCrmUserError" style="color:var(--red); font-size:13px; margin-top:10px; display:none;"></div>
     </div>
   </div>
 
@@ -605,6 +659,10 @@
     <div class="field">
       <label>Límite de dispositivos</label>
       <input id="fLimite" type="number" min="1" value="1" />
+    </div>
+    <div class="field">
+      <label>Integraciones / Configuración API (JSON)</label>
+      <textarea id="fIntegraciones" placeholder='{"Sancor": {"api_key": "123..."}, "Allianz": {"api_key": "456..."}}' rows="4" style="width:100%; border:1px solid var(--border); border-radius:6px; padding:8px; font-family:monospace; font-size:12px; background:var(--bg-1); color:var(--text);"></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn-ghost" id="btnCancelarModal">Cancelar</button>
@@ -983,10 +1041,12 @@ function mostrarDashboard(){
   // Control Visibility of Tabs
   if (USER.role === "panel_superadmin" || USER.role === "superadmin") {
     $("navTabUsers").style.display = "inline-flex";
+    $("navTabCrmUsers").style.display = "inline-flex";
     $("navTabSesiones").style.display = "inline-flex";
     $("navTabLogs").style.display = "inline-flex";
   } else {
     $("navTabUsers").style.display = "none";
+    $("navTabCrmUsers").style.display = "none";
     
     if (hasPerm("ver_sesiones")) {
       $("navTabSesiones").style.display = "inline-flex";
@@ -1622,6 +1682,7 @@ function abrirModal(lic){
   $("fProducto").value = lic ? (lic.producto || "CRM") : "CRM";
   $("fFecha").value = lic ? lic.fecha_expiracion : "";
   $("fLimite").value = lic ? lic.limite_dispositivos : 1;
+  $("fIntegraciones").value = lic ? (lic.integraciones || "") : "";
   $("modalTitulo").textContent = lic ? "Editar licencia" : "Nueva licencia";
   $("modalOverlay").style.display = "flex";
 }
@@ -1772,6 +1833,8 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
   const fecha = $("fFecha").value;
   const limite = Number($("fLimite").value) || 1;
 
+  const integraciones = $("fIntegraciones").value.trim() || null;
+
   if (!cliente || !email || !fecha){
     showToast("Completá cliente, email y fecha de expiración.", true);
     return;
@@ -1788,7 +1851,8 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
           limite_dispositivos: limite,
           dispositivo_id: lic ? lic.dispositivo_id || null : null,
           motivo: lic ? lic.motivo || null : null,
-          dispositivos_info: lic ? lic.dispositivos_info || null : null
+          dispositivos_info: lic ? lic.dispositivos_info || null : null,
+          integraciones: integraciones
         }),
       });
       showToast("Licencia actualizada.");
@@ -1832,12 +1896,17 @@ function switchTab(tabId) {
   if (tabId !== 'tab-usuarios') {
     $("tabUserFormCard").style.display = "none";
   }
+  if (tabId !== 'tab-crm-usuarios') {
+    $("tabCrmUserFormCard").style.display = "none";
+  }
   
   // Load data based on active tab
   if (tabId === 'tab-licencias') {
     cargarLicencias();
   } else if (tabId === 'tab-usuarios') {
     cargarUsuariosPanelTab();
+  } else if (tabId === 'tab-crm-usuarios') {
+    cargarCrmUsuariosTab();
   } else if (tabId === 'tab-sesiones') {
     cargarSesionesActivas();
   } else if (tabId === 'tab-logs') {
@@ -1855,6 +1924,95 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Redirect header button to tab
 $("btnManageUsers").addEventListener("click", () => {
   switchTab("tab-usuarios");
+});
+
+
+/* ---------------- TAB 2.5: GESTIÓN DE USUARIOS APP (CRM) ---------------- */
+let tabCrmUsers = [];
+
+async function cargarCrmUsuariosTab() {
+  try {
+    tabCrmUsers = await apiFetch("/usuarios/");
+    renderTabCrmUsers();
+  } catch(e) {
+    showToast("Error al cargar usuarios de App: " + e.message, true);
+  }
+}
+
+function renderTabCrmUsers() {
+  const tbody = $("tabCrmUsersTableBody");
+  tbody.innerHTML = "";
+  tabCrmUsers.forEach(u => {
+    const tr = document.createElement("tr");
+    tr.style.borderBottom = "1px solid var(--border)";
+    
+    tr.innerHTML = `
+      <td>${u.usuario}</td>
+      <td>${u.email}</td>
+      <td><span class="badge ${u.rol === 'admin' ? 'badge-activa' : 'badge-suspendida'}">${u.rol.toUpperCase()}</span></td>
+      <td style="text-align: center;">
+        <!-- Futuro: Editar o eliminar usuarios CRM -->
+        <span style="font-size:12px; color:var(--muted)">Sin acciones</span>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+$("btnTabNewCrmUser").addEventListener("click", () => {
+  $("tabCrmUserUsername").value = "";
+  $("tabCrmUserEmail").value = "";
+  $("tabCrmUserPassword").value = "";
+  $("tabCrmUserRole").value = "agente";
+  $("tabCrmUserFormCard").style.display = "block";
+  $("tabCrmUserUsername").focus();
+});
+
+$("btnCancelTabCrmUserForm").addEventListener("click", () => {
+  $("tabCrmUserFormCard").style.display = "none";
+});
+
+$("btnSaveTabCrmUser").addEventListener("click", async () => {
+  const err = $("tabCrmUserError");
+  err.style.display = "none";
+  
+  const usuario = $("tabCrmUserUsername").value.trim();
+  const email = $("tabCrmUserEmail").value.trim();
+  const password = $("tabCrmUserPassword").value.trim();
+  const rol = $("tabCrmUserRole").value;
+  
+  if (!usuario || !email || !password) {
+    err.textContent = "Usuario, email y contraseña son obligatorios.";
+    err.style.display = "block";
+    return;
+  }
+  
+  const originalBtnText = $("btnSaveTabCrmUser").textContent;
+  $("btnSaveTabCrmUser").textContent = "Guardando...";
+  $("btnSaveTabCrmUser").disabled = true;
+  
+  try {
+    await apiFetch("/usuarios/", {
+      method: "POST",
+      body: JSON.stringify({
+        usuario,
+        email,
+        password,
+        rol,
+        requiere_cambio: 0
+      })
+    });
+    
+    showToast("Usuario de App creado con éxito.", false);
+    $("tabCrmUserFormCard").style.display = "none";
+    await cargarCrmUsuariosTab();
+  } catch(e) {
+    err.textContent = e.message;
+    err.style.display = "block";
+  } finally {
+    $("btnSaveTabCrmUser").textContent = originalBtnText;
+    $("btnSaveTabCrmUser").disabled = false;
+  }
 });
 
 

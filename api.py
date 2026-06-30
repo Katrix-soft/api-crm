@@ -177,8 +177,11 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> T
 
 
 def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
-    if current.role != "admin":
-        raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
+    if current.role not in ["admin", "panel_superadmin", "panel_admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere rol de administrador para realizar esta acción",
+        )
     return current
 
 
@@ -986,7 +989,8 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
         limite_dispositivos=body.limite_dispositivos,
         dispositivo_id=body.dispositivo_id,
         motivo=body.motivo,
-        dispositivos_info=body.dispositivos_info
+        dispositivos_info=body.dispositivos_info,
+        integraciones=body.integraciones
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")

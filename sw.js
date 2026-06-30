@@ -1,4 +1,4 @@
-const CACHE_NAME = 'katrix-panel-cache-v3';
+const CACHE_NAME = 'katrix-panel-cache-v5';
 const ASSETS = [
   '/panel',
   '/panel/katrix-biometrics.js',
@@ -43,8 +43,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Do not cache biometrics challenges or health endpoint
-  if (url.pathname.includes('/panel/auth/biometrics/challenge') || url.pathname.includes('/health')) {
+  // Do not cache API requests or biometrics to prevent stale data
+  if (!url.pathname.startsWith('/panel') || url.pathname.includes('/panel/auth/biometrics/challenge') || url.pathname.includes('/health')) {
     return;
   }
 
