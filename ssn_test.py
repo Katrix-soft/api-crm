@@ -33,6 +33,87 @@ class DictRow(dict):
             return self._row[key]
         return super().__getitem__(key)
 
+
+def translate_group_concat(sql: str) -> str:
+    import re
+    # Búsqueda de GROUP_CONCAT sin importar mayúsculas/minúsculas
+    idx = 0
+    while True:
+        pos = sql.upper().find("GROUP_CONCAT", idx)
+        if pos == -1:
+            break
+        open_paren = sql.find("(", pos)
+        if open_paren == -1:
+            idx = pos + len("GROUP_CONCAT")
+            continue
+            
+        paren_count = 1
+        i = open_paren + 1
+        args_str = ""
+        while i < len(sql) and paren_count > 0:
+            char = sql[i]
+            if char == '(':
+                paren_count += 1
+            elif char == ')':
+                paren_count -= 1
+            if paren_count > 0:
+                args_str += char
+            i += 1
+            
+        if paren_count > 0:
+            idx = open_paren + 1
+            continue
+            
+        args = []
+        current_arg = ""
+        p_depth = 0
+        in_single_quote = False
+        in_double_quote = False
+        j = 0
+        while j < len(args_str):
+            c = args_str[j]
+            if c == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif c == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif not in_single_quote and not in_double_quote:
+                if c == '(':
+                    p_depth += 1
+                elif c == ')':
+                    p_depth -= 1
+                elif c == ',' and p_depth == 0:
+                    args.append(current_arg.strip())
+                    current_arg = ""
+                    j += 1
+                    continue
+            current_arg += c
+            j += 1
+        args.append(current_arg.strip())
+        
+        if len(args) == 1:
+            expr = args[0]
+            if expr.upper().startswith("DISTINCT "):
+                real_expr = expr[9:]
+                new_str = f"string_agg(DISTINCT ({real_expr})::text, ',')"
+            else:
+                new_str = f"string_agg(({expr})::text, ',')"
+        elif len(args) == 2:
+            expr, sep = args[0], args[1]
+            if expr.upper().startswith("DISTINCT "):
+                real_expr = expr[9:]
+                new_str = f"string_agg(DISTINCT ({real_expr})::text, {sep})"
+            else:
+                new_str = f"string_agg(({expr})::text, {sep})"
+        else:
+            idx = i
+            continue
+            
+        sql = sql[:pos] + new_str + sql[i:]
+        idx = pos + len(new_str)
+        
+    return sql
+
+
 class PostgresCursorWrapper:
     def __init__(self, pg_cursor, connection):
         self._cursor = pg_cursor
@@ -46,6 +127,9 @@ class PostgresCursorWrapper:
     def execute(self, sql, params=None):
         if sql.strip().upper().startswith("PRAGMA"):
             return self
+
+        # Traducir GROUP_CONCAT a string_agg para PostgreSQL
+        sql = translate_group_concat(sql)
 
         # Traducir ? a %s
         translated_sql = sql.replace('?', '%s')
@@ -150,6 +234,9 @@ class PostgresCursorWrapper:
     def executemany(self, sql, seq_of_parameters):
         if sql.strip().upper().startswith("PRAGMA"):
             return self
+
+        # Traducir GROUP_CONCAT a string_agg para PostgreSQL
+        sql = translate_group_concat(sql)
 
         # Traducir ? a %s
         translated_sql = sql.replace('?', '%s')
