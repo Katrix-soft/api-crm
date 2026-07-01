@@ -1,4 +1,4 @@
-const CACHE_NAME = 'katrix-panel-cache-v5';
+const CACHE_NAME = 'katrix-panel-cache-v6';
 const ASSETS = [
   '/panel',
   '/panel/katrix-biometrics.js',

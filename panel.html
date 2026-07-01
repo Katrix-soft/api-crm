@@ -726,20 +726,8 @@
     <h2>Dispositivos Vinculados</h2>
     <p style="font-size:13px; color:var(--muted); margin-bottom:14px;">Detalles de los equipos que tienen asociada esta licencia para evitar duplicidad y uso compartido.</p>
     
-    <div style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-        <thead>
-          <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border);">
-            <th style="padding: 10px; text-align: left;">IP / Usuario SO</th>
-            <th style="padding: 10px; text-align: left;">Sistema / CPU</th>
-            <th style="padding: 10px; text-align: left;">Primer Uso / Último Uso</th>
-            <th style="padding: 10px; text-align: center;">Acciones</th>
-          </tr>
-        </thead>
-        <tbody id="dispositivosTableBody">
-          <!-- Se llena dinámicamente -->
-        </tbody>
-      </table>
+    <div id="dispositivosContainer" style="max-height: 380px; overflow-y: auto; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; padding: 4px;">
+      <!-- Se llena dinámicamente con tarjetas de dispositivo -->
     </div>
     
     <div class="modal-actions">
@@ -1705,42 +1693,78 @@ function mostrarDispositivos(licId) {
     }));
   } catch(e) {}
   
-  const tbody = $("dispositivosTableBody");
-  tbody.innerHTML = "";
+  const container = $("dispositivosContainer");
+  container.innerHTML = "";
   
   const showDesvincular = hasPerm("desvincular_dispositivo");
   $("btnDesvincularTodos").style.display = (showDesvincular && dispositivos.length > 0) ? "inline-flex" : "none";
   
   if (dispositivos.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--muted);">No hay dispositivos vinculados aún.</td></tr>`;
+    container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--muted); border: 1px dashed var(--border); border-radius: 6px;">No hay dispositivos vinculados aún.</div>`;
   } else {
     dispositivos.forEach(d => {
       let sysName = d.sistema_operativo || d.nombre || "Desconocido";
       let sysUser = d.usuario || "desconocido";
       let cpu = d.procesador || "N/A";
+      let host = d.hostname || "N/A";
+      let arch = d.arquitectura || "N/A";
       
-      const tr = document.createElement("tr");
-      tr.style.borderBottom = "1px solid var(--border)";
-      tr.innerHTML = `
-        <td style="padding: 10px; vertical-align: top;">
-          <div style="font-weight:600;">${d.ip || "Desconocida"}</div>
-          <div style="font-size:11px; color:var(--muted);">Usuario SO: ${sysUser}</div>
-        </td>
-        <td style="padding: 10px; vertical-align: top;">
-          <div>${sysName}</div>
-          <div style="font-size:11px; color:var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">CPU: ${cpu}</div>
-        </td>
-        <td style="padding: 10px; vertical-align: top;">
-          <div style="font-size:11px;">Primer: ${d.primer_uso || "N/A"}</div>
-          <div style="font-size:11px; color:var(--muted);">Último: ${d.ultimo_uso || "N/A"}</div>
-        </td>
-        <td style="padding: 10px; text-align: center; vertical-align: middle;">
+      const card = document.createElement("div");
+      card.style.background = "rgba(255, 255, 255, 0.02)";
+      card.style.border = "1px solid var(--border)";
+      card.style.borderRadius = "8px";
+      card.style.padding = "14px";
+      card.style.display = "flex";
+      card.style.flexDirection = "column";
+      card.style.gap = "10px";
+      card.style.marginBottom = "10px";
+      card.style.textAlign = "left";
+      
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:18px;">📱</span>
+            <div>
+              <div style="font-weight:600; font-size:14px; color:var(--text);">${sysName}</div>
+              <div style="font-size:11px; color:var(--muted);">ID: ${d.id}</div>
+            </div>
+          </div>
           ${showDesvincular 
-            ? `<button class="btn-danger" style="font-size:11px; padding:4px 8px;" onclick="desvincularDispositivo('${d.id}')">Desvincular</button>`
-            : `<span style="color:var(--muted); font-size:11px;">Sin permiso</span>`}
-        </td>
+            ? `<button class="btn-danger" style="font-size:11px; padding:5px 10px; border-radius:4px;" onclick="desvincularDispositivo('${d.id}')">Desvincular</button>`
+            : `<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--muted); font-size:10px;">Solo lectura</span>`}
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 16px; font-size:12px;">
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Dirección IP</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${d.ip || "Desconocida"}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Usuario SO</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${sysUser}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Hostname</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${host}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Arquitectura</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${arch}</div>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Procesador</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px; line-height:1.4;">${cpu}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Primer Uso</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${d.primer_uso || "N/A"}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">Último Uso</div>
+            <div style="font-weight:500; color:var(--text); margin-top:2px;">${d.ultimo_uso || "N/A"}</div>
+          </div>
+        </div>
       `;
-      tbody.appendChild(tr);
+      container.appendChild(card);
     });
   }
   
