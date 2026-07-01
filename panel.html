@@ -513,23 +513,55 @@
       <button class="btn-ghost" id="btnRefrescarSesiones">Refrescar Sesiones</button>
     </div>
     
-    <div class="table-wrap">
-      <table style="width: 100%; border-collapse: collapse;">
-        <thead>
-          <tr>
-            <th>Usuario</th>
-            <th>Rol</th>
-            <th>IP Origen</th>
-            <th>Navegador / Sistema</th>
-            <th>Última Actividad</th>
-            <th style="text-align: center;">Acciones</th>
-          </tr>
-        </thead>
-        <tbody id="sesionesTableBody">
-          <!-- Dinámico -->
-        </tbody>
-      </table>
-      <p class="empty" id="emptySesionesMsg" style="display:none;">No hay sesiones activas.</p>
+    <!-- Sección 1: Administradores del Panel -->
+    <div class="card" style="margin-bottom: 24px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">
+      <div style="font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <span>💻</span> Administradores del Panel
+      </div>
+      <div class="table-wrap">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th>Usuario</th>
+              <th>Rol</th>
+              <th>IP Origen</th>
+              <th>Navegador / Sistema</th>
+              <th>Última Actividad</th>
+              <th style="text-align: center;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="sesionesTableBody">
+            <!-- Dinámico -->
+          </tbody>
+        </table>
+        <p class="empty" id="emptySesionesMsg" style="display:none;">No hay administradores en línea.</p>
+      </div>
+    </div>
+
+    <!-- Sección 2: Usuarios de la App (deploys-app-pas.juidi9.easypanel.host) -->
+    <div class="card" style="background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">
+      <div style="font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+        <span>📱</span> Usuarios de la App (Flutter)
+      </div>
+      <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">https://deploys-app-pas.juidi9.easypanel.host/</div>
+      <div class="table-wrap">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th>Usuario</th>
+              <th>Rol</th>
+              <th>IP Origen</th>
+              <th>Navegador / Sistema</th>
+              <th>Última Actividad</th>
+              <th style="text-align: center;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="sesionesAppTableBody">
+            <!-- Dinámico -->
+          </tbody>
+        </table>
+        <p class="empty" id="emptySesionesAppMsg" style="display:none;">No hay usuarios conectados a la App actualmente.</p>
+      </div>
     </div>
   </div>
 
@@ -2216,6 +2248,7 @@ $("btnSaveTabUser").addEventListener("click", async () => {
 /* ---------------- TAB 3: SESIONES ACTIVAS ---------------- */
 
 async function cargarSesionesActivas() {
+  // 1. Cargar sesiones del Panel Admin
   try {
     const sessions = await apiFetch("/panel/sessions");
     const tbody = $("sesionesTableBody");
@@ -2223,62 +2256,111 @@ async function cargarSesionesActivas() {
     
     if (!sessions || sessions.length === 0) {
       $("emptySesionesMsg").style.display = "block";
-      return;
+    } else {
+      $("emptySesionesMsg").style.display = "none";
+      sessions.forEach(s => {
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid var(--border)";
+        
+        const esPropio = s.username === USER.username;
+        const displayUser = esPropio ? `${s.username} <span style="color:var(--accent); font-weight:600; font-size:11px; margin-left:4px;">(Vos)</span>` : s.username;
+        
+        let uaFriendly = formatUA(s.user_agent);
+        let lastActStr = formatLastActive(s.last_active);
+        
+        tr.innerHTML = `
+          <td style="padding: 12px; font-weight: 600;">${displayUser}</td>
+          <td style="padding: 12px;"><span class="badge ${s.role.includes('superadmin') ? 'badge-activa' : 'badge-expirada'}">${s.role}</span></td>
+          <td style="padding: 12px; font-family: monospace; font-size:12px;">${s.ip}</td>
+          <td style="padding: 12px; font-size: 12px; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${s.user_agent}">${uaFriendly}</td>
+          <td style="padding: 12px; font-size: 12px;">${lastActStr}</td>
+          <td style="padding: 12px; text-align: center;">
+            ${esPropio ? '' : `<button class="btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="revocarSesion('${s.username}')">Desconectar</button>`}
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
     }
-    $("emptySesionesMsg").style.display = "none";
-    
-    sessions.forEach(s => {
-      const tr = document.createElement("tr");
-      tr.style.borderBottom = "1px solid var(--border)";
-      
-      const esPropio = s.username === USER.username;
-      const displayUser = esPropio ? `${s.username} <span style="color:var(--accent); font-weight:600; font-size:11px; margin-left:4px;">(Vos)</span>` : s.username;
-      
-      let uaFriendly = s.user_agent;
-      if (s.user_agent.includes("Chrome/")) {
-        uaFriendly = "Chrome";
-        if (s.user_agent.includes("Windows")) uaFriendly += " (Windows)";
-        else if (s.user_agent.includes("Macintosh")) uaFriendly += " (macOS)";
-        else if (s.user_agent.includes("Linux")) uaFriendly += " (Linux)";
-      } else if (s.user_agent.includes("Firefox/")) {
-        uaFriendly = "Firefox";
-        if (s.user_agent.includes("Windows")) uaFriendly += " (Windows)";
-        else if (s.user_agent.includes("Linux")) uaFriendly += " (Linux)";
-      } else if (s.user_agent.includes("Safari/") && !s.user_agent.includes("Chrome/")) {
-        uaFriendly = "Safari";
-        if (s.user_agent.includes("iPhone")) uaFriendly += " (iPhone)";
-      }
-      
-      let lastActStr = "Recién";
-      try {
-        const diff = Math.floor((new Date() - new Date(s.last_active)) / 1000);
-        if (diff > 60) {
-          const mins = Math.floor(diff / 60);
-          if (mins > 60) {
-            lastActStr = `Hace ${Math.floor(mins / 60)}h`;
-          } else {
-            lastActStr = `Hace ${mins} min`;
-          }
-        } else if (diff > 5) {
-          lastActStr = `Hace ${diff}s`;
-        }
-      } catch(e) {}
-      
-      tr.innerHTML = `
-        <td style="padding: 12px; font-weight: 600;">${displayUser}</td>
-        <td style="padding: 12px;"><span class="badge ${s.role.includes('superadmin') ? 'badge-activa' : 'badge-expirada'}">${s.role}</span></td>
-        <td style="padding: 12px; font-family: monospace; font-size:12px;">${s.ip}</td>
-        <td style="padding: 12px; font-size: 12px; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${s.user_agent}">${uaFriendly}</td>
-        <td style="padding: 12px; font-size: 12px;">${lastActStr}</td>
-        <td style="padding: 12px; text-align: center;">
-          ${esPropio ? '' : `<button class="btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="revocarSesion('${s.username}')">Desconectar</button>`}
-        </td>
-      `;
-      tbody.appendChild(tr);
-    });
   } catch(e) {
-    showToast("Error al cargar sesiones activas: " + e.message, true);
+    showToast("Error al cargar sesiones del panel: " + e.message, true);
   }
+
+  // 2. Cargar sesiones de la App (deploys-app-pas.juidi9.easypanel.host)
+  try {
+    const appSessions = await apiFetch("/panel/app-sessions");
+    const tbodyApp = $("sesionesAppTableBody");
+    tbodyApp.innerHTML = "";
+    
+    if (!appSessions || appSessions.length === 0) {
+      $("emptySesionesAppMsg").style.display = "block";
+    } else {
+      $("emptySesionesAppMsg").style.display = "none";
+      appSessions.forEach(s => {
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid var(--border)";
+        
+        let uaFriendly = formatUA(s.user_agent);
+        let lastActStr = formatLastActive(s.last_active);
+        
+        tr.innerHTML = `
+          <td style="padding: 12px; font-weight: 600;">${s.username}</td>
+          <td style="padding: 12px;"><span class="badge" style="background:${s.role === 'admin' ? 'rgba(0,180,120,0.15)' : 'rgba(100,100,250,0.15)'}; color:${s.role === 'admin' ? '#00e080' : '#80a0ff'}; padding: 4px 8px; border-radius: 4px; font-size: 11px;">${s.role}</span></td>
+          <td style="padding: 12px; font-family: monospace; font-size:12px;">${s.ip}</td>
+          <td style="padding: 12px; font-size: 12px; color: var(--muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${s.user_agent}">${uaFriendly}</td>
+          <td style="padding: 12px; font-size: 12px;">${lastActStr}</td>
+          <td style="padding: 12px; text-align: center;">
+            <button class="btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="revocarSesionApp('${s.username}')">Desconectar</button>
+          </td>
+        `;
+        tbodyApp.appendChild(tr);
+      });
+    }
+  } catch(e) {
+    showToast("Error al cargar sesiones de la App: " + e.message, true);
+  }
+}
+
+// Helpers para formatear User-Agent y tiempo de actividad
+function formatUA(ua) {
+  if (!ua) return "Desconocido";
+  let uaFriendly = ua;
+  if (ua.includes("Chrome/")) {
+    uaFriendly = "Chrome";
+    if (ua.includes("Windows")) uaFriendly += " (Windows)";
+    else if (ua.includes("Macintosh")) uaFriendly += " (macOS)";
+    else if (ua.includes("Linux")) uaFriendly += " (Linux)";
+    else if (ua.includes("Android")) uaFriendly += " (Android)";
+  } else if (ua.includes("Firefox/")) {
+    uaFriendly = "Firefox";
+    if (ua.includes("Windows")) uaFriendly += " (Windows)";
+    else if (ua.includes("Linux")) uaFriendly += " (Linux)";
+    else if (ua.includes("Android")) uaFriendly += " (Android)";
+  } else if (ua.includes("Safari/") && !ua.includes("Chrome/")) {
+    uaFriendly = "Safari";
+    if (ua.includes("iPhone")) uaFriendly += " (iPhone)";
+    else if (ua.includes("iPad")) uaFriendly += " (iPad)";
+  } else if (ua.includes("Dart/")) {
+    uaFriendly = "Flutter App (Mobile)";
+  }
+  return uaFriendly;
+}
+
+function formatLastActive(lastActive) {
+  let lastActStr = "Recién";
+  try {
+    const diff = Math.floor((new Date() - new Date(lastActive)) / 1000);
+    if (diff > 60) {
+      const mins = Math.floor(diff / 60);
+      if (mins > 60) {
+        lastActStr = `Hace ${Math.floor(mins / 60)}h`;
+      } else {
+        lastActStr = `Hace ${mins} min`;
+      }
+    } else if (diff > 5) {
+      lastActStr = `Hace ${diff}s`;
+    }
+  } catch(e) {}
+  return lastActStr;
 }
 
 window.revocarSesion = function(username) {
@@ -2289,6 +2371,22 @@ window.revocarSesion = function(username) {
       try {
         await apiFetch(`/panel/sessions/${username}/revoke`, { method: "POST" });
         showToast(`Sesión de "${username}" revocada correctamente.`);
+        await cargarSesionesActivas();
+      } catch(e) {
+        showToast(e.message, true);
+      }
+    }
+  });
+};
+
+window.revocarSesionApp = function(username) {
+  customConfirm({
+    title: "Revocar Sesión de la App",
+    message: `¿Estás seguro de desconectar de la App al usuario "${username}"? Se le cerrará la sesión de forma inmediata.`,
+    onAccept: async () => {
+      try {
+        await apiFetch(`/panel/app-sessions/${username}/revoke`, { method: "POST" });
+        showToast(`Sesión de App de "${username}" revocada correctamente.`);
         await cargarSesionesActivas();
       } catch(e) {
         showToast(e.message, true);

@@ -125,6 +125,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 # ─── Panel Sessions tracking in memory ────────────────────────────────────────
 PANEL_SESSIONS = {}
+APP_SESSIONS = {}
 REVOKED_SESSIONS = set()
 
 # ─── JWT Helpers ─────────────────────────────────────────────────────────────
@@ -151,18 +152,31 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> T
             raise cred_err
             
         # Validar y registrar sesión si es usuario del panel de licencias
-        if role in ["panel_admin", "panel_superadmin", "admin"]:
-            if username in REVOKED_SESSIONS:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Tu sesión ha sido revocada por un administrador.",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+        if username in REVOKED_SESSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Tu sesión ha sido revocada por un administrador.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
             
+        if role in ["panel_admin", "panel_superadmin", "admin"]:
             # Registrar/actualizar la actividad en línea
             client_host = request.client.host if request.client else "Desconocida"
             user_agent = request.headers.get("user-agent", "Desconocido")
             PANEL_SESSIONS[username] = {
+                "username": username,
+                "role": role,
+                "ip": client_host,
+                "user_agent": user_agent,
+                "last_active": datetime.utcnow().isoformat(),
+                "status": "online"
+            }
+            
+        # Registrar/actualizar la actividad en la App Flutter
+        if role in ["admin", "agente"]:
+            client_host = request.client.host if request.client else "Desconocida"
+            user_agent = request.headers.get("user-agent", "Desconocido")
+            APP_SESSIONS[username] = {
                 "username": username,
                 "role": role,
                 "ip": client_host,
@@ -1771,6 +1785,38 @@ def panel_revoke_session(username: str, current: TokenData = Depends(require_lic
     
     db.registrar_log(current.username, "PANEL_SESSION_REVOKE", f"Forzó cierre de sesión para usuario: {username}")
     return MessageResponse(ok=True, message=f"Sesión del usuario '{username}' revocada exitosamente")
+
+@app.get("/panel/app-sessions", tags=["Panel Sessions"])
+def panel_list_app_sessions(current: TokenData = Depends(require_licencias_admin)):
+    # Lazy cleanup of old app sessions (inactive for more than 12 hours)
+    now = datetime.utcnow()
+    for u, s in list(APP_SESSIONS.items()):
+        try:
+            last_act = datetime.fromisoformat(s["last_active"])
+            if now - last_act > timedelta(hours=12):
+                APP_SESSIONS.pop(u, None)
+        except Exception:
+            APP_SESSIONS.pop(u, None)
+
+    if current.role not in ["panel_superadmin", "admin"]:
+        check_panel_permission(current.username, current.role, "ver_sesiones")
+
+    return list(APP_SESSIONS.values())
+
+@app.post("/panel/app-sessions/{username}/revoke", response_model=MessageResponse, tags=["Panel Sessions"])
+def panel_revoke_app_session(username: str, current: TokenData = Depends(require_licencias_admin)):
+    if username == current.username:
+        raise HTTPException(status_code=400, detail="No podés revocar tu propia sesión activa")
+        
+    if current.role not in ["panel_superadmin", "admin"]:
+        check_panel_permission(current.username, current.role, "desvincular_sesion")
+        
+    # Revocar sesión
+    APP_SESSIONS.pop(username, None)
+    REVOKED_SESSIONS.add(username)
+    
+    db.registrar_log(current.username, "APP_SESSION_REVOKE", f"Forzó cierre de sesión de App para usuario: {username}")
+    return MessageResponse(ok=True, message=f"Sesión de App del usuario '{username}' revocada exitosamente")
 
 @app.get("/panel/logs", tags=["Panel Logs"])
 def panel_list_logs(
