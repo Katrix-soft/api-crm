@@ -415,3 +415,13 @@ class LicenciaValidarResponse(BaseModel):
     cliente: str
     fecha_expiracion: str
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., description="Nombre de usuario o correo electrónico")
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(..., min_length=6)
+
+

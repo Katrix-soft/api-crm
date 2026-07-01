@@ -269,6 +269,415 @@ def get_me(current: TokenData = Depends(get_current_user)):
     )
 
 
+@app.post("/auth/forgot-password", response_model=MessageResponse, tags=["Auth"])
+@limiter.limit("3/minute")
+def forgot_password(request: Request, body: ForgotPasswordRequest):
+    """Solicita la recuperación de contraseña enviando un link por email."""
+    email_clean = body.email.strip().lower()
+    usuarios = db.obtener_usuarios()
+    user = next((u for u in usuarios if (u.get("email") or "").lower() == email_clean or (u.get("usuario") or "").lower() == email_clean), None)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario o correo electrónico no registrado")
+    
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="El usuario no tiene una dirección de correo configurada")
+        
+    # Crear token JWT de recuperación temporal (expira en 1 hora)
+    token_exp = datetime.utcnow() + timedelta(hours=1)
+    payload = {
+        "sub": "reset_password",
+        "email": user_email,
+        "username": user.get("usuario"),
+        "exp": token_exp
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    
+    # Generar URL de restablecimiento
+    base_url = str(request.base_url).rstrip('/')
+    reset_url = f"{base_url}/auth/reset-password?token={token}"
+    
+    # Enviar correo en segundo plano
+    import threading
+    def send_recovery():
+        db.enviar_mail_recuperacion_link(user_email, reset_url)
+    threading.Thread(target=send_recovery, daemon=True).start()
+    
+    db.registrar_log(user.get("usuario") or user_email, "PASSWORD_RESET_REQUESTED", f"Enlace enviado a {user_email}")
+    
+    return MessageResponse(ok=True, message="Enlace de recuperación enviado con éxito")
+
+
+@app.get("/auth/reset-password", tags=["Auth"])
+def get_reset_password(token: str):
+    """Sirve la vista HTML premium para restablecer la contraseña."""
+    from fastapi.responses import HTMLResponse
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("sub") != "reset_password":
+            raise HTTPException(status_code=400, detail="Token no válido para restablecer contraseña")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="El token es inválido o ha expirado")
+        
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Restablecer Contraseña — Katrix CRM</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      --card-bg: rgba(30, 41, 59, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --error: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }}
+    
+    * {{
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }}
+    
+    body {{
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }}
+    
+    .container {{
+      width: 100%;
+      max-width: 440px;
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 40px 30px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }}
+    
+    .container::before {{
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #3b82f6, #6366f1);
+    }}
+    
+    .logo {{
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      background: linear-gradient(to right, #3b82f6, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }}
+    
+    .subtitle {{
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }}
+    
+    .title {{
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }}
+    
+    .form-group {{
+      text-align: left;
+      margin-bottom: 20px;
+    }}
+    
+    label {{
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }}
+    
+    input {{
+      width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 15px;
+      transition: all 0.3s ease;
+    }}
+    
+    input:focus {{
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }}
+    
+    button {{
+      width: 100%;
+      background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+      border: none;
+      border-radius: 10px;
+      padding: 15px;
+      color: white;
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+      margin-top: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+    }}
+    
+    button:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4);
+    }}
+    
+    button:active {{
+      transform: translateY(0);
+    }}
+    
+    button:disabled {{
+      background: #475569;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }}
+    
+    .spinner {{
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 0.8s linear infinite;
+      display: none;
+    }}
+    
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
+    
+    .alert {{
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-bottom: 24px;
+      display: none;
+      text-align: left;
+      line-height: 1.5;
+    }}
+    
+    .alert-error {{
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }}
+    
+    .alert-success {{
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #a7f3d0;
+    }}
+    
+    .success-icon {{
+      width: 60px;
+      height: 60px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 2px solid var(--success);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px auto;
+      color: var(--success);
+      font-size: 32px;
+      animation: scaleUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    }}
+    
+    @keyframes scaleUp {{
+      from {{ transform: scale(0); }}
+      to {{ transform: scale(1); }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="container" id="card">
+    <div class="logo">KATRIX</div>
+    <div class="subtitle">Sistema de Gestión</div>
+    
+    <div id="form-view">
+      <div class="title">Establecer Nueva Contraseña</div>
+      
+      <div class="alert alert-error" id="error-box"></div>
+      
+      <form id="reset-form">
+        <input type="hidden" id="token-input" value="{token}">
+        
+        <div class="form-group">
+          <label for="password">Nueva Contraseña</label>
+          <input type="password" id="password" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </div>
+        
+        <div class="form-group">
+          <label for="confirm-password">Confirmar Contraseña</label>
+          <input type="password" id="confirm-password" required minlength="6" placeholder="Repite la contraseña">
+        </div>
+        
+        <button type="submit" id="submit-btn">
+          <span class="spinner" id="btn-spinner"></span>
+          <span id="btn-text">Cambiar Contraseña</span>
+        </button>
+      </form>
+    </div>
+    
+    <div id="success-view" style="display: none;">
+      <div class="success-icon">✓</div>
+      <div class="title" style="margin-bottom: 12px;">¡Contraseña Cambiada!</div>
+      <p style="color: var(--text-muted); font-size: 15px; margin-bottom: 24px; line-height: 1.6;">
+        Tu contraseña ha sido actualizada con éxito. Ya puedes regresar a la aplicación de Katrix y acceder con tus nuevas credenciales.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('reset-form');
+    const password = document.getElementById('password');
+    const confirmPassword = document.getElementById('confirm-password');
+    const submitBtn = document.getElementById('submit-btn');
+    const btnSpinner = document.getElementById('btn-spinner');
+    const btnText = document.getElementById('btn-text');
+    const errorBox = document.getElementById('error-box');
+    const formView = document.getElementById('form-view');
+    const successView = document.getElementById('success-view');
+    
+    form.addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      
+      errorBox.style.display = 'none';
+      
+      if (password.value !== confirmPassword.value) {{
+        errorBox.textContent = 'Las contraseñas no coinciden.';
+        errorBox.style.display = 'block';
+        return;
+      }}
+      
+      if (password.value.length < 6) {{
+        errorBox.textContent = 'La contraseña debe tener al menos 6 caracteres.';
+        errorBox.style.display = 'block';
+        return;
+      }}
+      
+      // Bloquear botón y mostrar spinner
+      submitBtn.disabled = true;
+      btnSpinner.style.display = 'inline-block';
+      btnText.textContent = 'Procesando...';
+      
+      try {{
+        const token = document.getElementById('token-input').value;
+        const response = await fetch('/auth/reset-password', {{
+          method: 'POST',
+          headers: {{
+            'Content-Type': 'application/json',
+          }},
+          body: JSON.stringify({{
+            token: token,
+            password: password.value
+          }})
+        }});
+        
+        const result = await response.json();
+        
+        if (response.ok) {{
+          formView.style.display = 'none';
+          successView.style.display = 'block';
+        }} else {{
+          errorBox.textContent = result.detail || 'Ocurrió un error al procesar tu solicitud.';
+          errorBox.style.display = 'block';
+          submitBtn.disabled = false;
+          btnSpinner.style.display = 'none';
+          btnText.textContent = 'Cambiar Contraseña';
+        }}
+      }} catch (err) {{
+        errorBox.textContent = 'Error de conexión con el servidor.';
+        errorBox.style.display = 'block';
+        submitBtn.disabled = false;
+        btnSpinner.style.display = 'none';
+        btnText.textContent = 'Cambiar Contraseña';
+      }}
+    }});
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+@app.post("/auth/reset-password", response_model=MessageResponse, tags=["Auth"])
+def post_reset_password(body: ResetPasswordRequest):
+    """Procesa el formulario web de restablecimiento de contraseña."""
+    try:
+        payload = jwt.decode(body.token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("sub") != "reset_password":
+            raise HTTPException(status_code=400, detail="Token no válido para restablecer contraseña")
+        user_email = payload.get("email")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="El enlace de recuperación es inválido o ha expirado")
+        
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Token inválido: falta información de usuario")
+        
+    # Buscar el usuario para obtener su identificador principal
+    usuarios = db.obtener_usuarios()
+    user = next((u for u in usuarios if (u.get("email") or "").lower() == user_email.lower()), None)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+    # Usar el nombre de usuario principal para actualizar la contraseña
+    username_key = user.get("usuario") or user_email
+    
+    success = db.actualizar_password(username_key, body.password)
+    if not success:
+        raise HTTPException(status_code=500, detail="No se pudo actualizar la contraseña en el sistema")
+        
+    db.registrar_log(username_key, "PASSWORD_RESET_SUCCESS", "Contraseña restablecida a través de enlace de correo")
+    
+    return MessageResponse(ok=True, message="Contraseña actualizada exitosamente")
+
+
 # ─── PAS ─────────────────────────────────────────────────────────────────────
 
 @app.get("/pas/", response_model=PaginatedPAS, tags=["Productores PAS"])

@@ -1625,7 +1625,7 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
     smtp_port = 587
     sender_email = "no-reply@katrix.com.ar"
     sender_name = "No responder - Katrix"
-    smtp_username = "no-reply@katrix.com.ar"
+    smtp_username = "supit@katrix.com.ar"
     smtp_password = "Nachax5$"
     
     msg = MIMEMultipart()
@@ -1656,7 +1656,7 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        server = smtplib.SMTP(smtp_address, smtp_port, timeout=3)
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=30)
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
@@ -1667,6 +1667,81 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
     except Exception as e:
         print(f"Error al enviar correo por SMTP: {e}")
         return False
+
+
+def enviar_mail_recuperacion_link(destinatario: str, url_recuperacion: str) -> bool:
+    smtp_address = "mail.arkhon.com.ar"
+    smtp_port = 587
+    sender_email = "no-reply@katrix.com.ar"
+    sender_name = "No responder - Katrix"
+    smtp_username = "supit@katrix.com.ar"
+    smtp_password = "Nachax5$"
+    
+    msg = MIMEMultipart()
+    msg['From'] = f'"{sender_name}" <{sender_email}>'
+    msg['To'] = destinatario
+    msg['Subject'] = "Restablecer Contraseña - Katrix CRM"
+    
+    body = f"""
+    <html>
+      <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333333; background-color: #f9f9f9; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e1e8ed;">
+          <div style="background-color: #1F3C88; padding: 30px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0.5px;">Restablecer Contraseña</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.8; font-size: 14px;">Katrix CRM</p>
+          </div>
+          <div style="padding: 30px; background-color: #ffffff;">
+            <p style="margin-top: 0; font-size: 16px; color: #4a5568;">Hola,</p>
+            <p style="font-size: 15px; color: #4a5568; line-height: 1.6;">
+              Recibimos una solicitud para restablecer la contraseña de tu cuenta en **Katrix CRM**.
+            </p>
+            <p style="font-size: 15px; color: #4a5568; line-height: 1.6;">
+              Para continuar, haz clic en el siguiente botón para establecer una nueva contraseña. Este enlace expirará en 1 hora por razones de seguridad.
+            </p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="{url_recuperacion}" style="background-color: #1F3C88; color: #ffffff; padding: 14px 28px; text-decoration: none; font-weight: bold; border-radius: 6px; font-size: 15px; display: inline-block; box-shadow: 0 4px 6px rgba(31,60,136,0.15); transition: background-color 0.2s;">
+                Restablecer Contraseña
+              </a>
+            </div>
+            <p style="font-size: 13px; color: #718096; line-height: 1.5;">
+              Si el botón no funciona, puedes copiar y pegar el siguiente enlace en tu navegador web:
+            </p>
+            <p style="font-size: 13px; color: #1F3C88; word-break: break-all; background-color: #f7fafc; padding: 12px; border-radius: 6px; border: 1px dashed #cbd5e0;">
+              {url_recuperacion}
+            </p>
+            <p style="font-size: 14px; color: #718096; margin-top: 25px;">
+              Si tú no realizaste esta solicitud, puedes ignorar este correo de forma segura. Tu contraseña actual no cambiará.
+            </p>
+          </div>
+          <div style="background-color: #f7fafc; padding: 20px; text-align: center; border-top: 1px solid #edf2f7;">
+            <p style="font-size: 11px; color: #a0aec0; margin: 0;">
+              Este es un correo automático generado por el sistema de Katrix. Por favor no lo respondas.
+            </p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, 'html', 'utf-8'))
+    
+    try:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=30)
+        server.ehlo()
+        server.starttls(context=context)
+        server.ehlo()
+        server.login(smtp_username, smtp_password)
+        server.sendmail(sender_email, destinatario, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error al enviar correo por SMTP: {e}")
+        return False
+
+
 
 
 def enviar_mail_alerta_licencia(destinatario: str, cliente: str, email_cliente: str, clave: str, accion: str, motivo: str = None, dispositivo_id: str = None, dispositivos_info: str = None) -> bool:
