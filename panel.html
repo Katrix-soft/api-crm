@@ -1930,8 +1930,15 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
 
 /* ---------------- TABS NAVIGATION & MULTI-ROLE SECTIONS ---------------- */
 
+let sesionInterval = null;
+
 // Switch tab function
 function switchTab(tabId) {
+  if (sesionInterval) {
+    clearInterval(sesionInterval);
+    sesionInterval = null;
+  }
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.getAttribute('data-tab') === tabId) {
       btn.classList.add('active');
@@ -1965,6 +1972,7 @@ function switchTab(tabId) {
     cargarCrmUsuariosTab();
   } else if (tabId === 'tab-sesiones') {
     cargarSesionesActivas();
+    sesionInterval = setInterval(cargarSesionesActivas, 5000);
   } else if (tabId === 'tab-logs') {
     cargarLogsAuditoria();
   }
