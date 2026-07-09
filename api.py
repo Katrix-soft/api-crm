@@ -1427,8 +1427,7 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
         limite_dispositivos=body.limite_dispositivos,
         dispositivo_id=body.dispositivo_id,
         motivo=body.motivo,
-        dispositivos_info=body.dispositivos_info,
-        integraciones=body.integraciones
+        dispositivos_info=body.dispositivos_info
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")
