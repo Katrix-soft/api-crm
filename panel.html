@@ -1836,7 +1836,7 @@ $("btnDesvincularTodos").addEventListener("click", async () => {
             fecha_expiracion: lic.fecha_expiracion,
             estado: lic.estado,
             limite_dispositivos: lic.limite_dispositivos,
-            dispositivo_id: null,
+            dispositivo_id: "",
             motivo: lic.motivo || null,
             dispositivos_info: "{}"
           })
@@ -1876,7 +1876,7 @@ async function desvincularDispositivo(devId) {
             fecha_expiracion: lic.fecha_expiracion,
             estado: lic.estado,
             limite_dispositivos: lic.limite_dispositivos,
-            dispositivo_id: registered.join(",") || null,
+            dispositivo_id: registered.join(",") || "",
             motivo: lic.motivo || null,
             dispositivos_info: JSON.stringify(info)
           })
