@@ -949,6 +949,27 @@ def inicializar_db():
             # Seguro que el policy ID exista. El sexto es de Allianz ART (ID 6)
             cursor.execute("INSERT INTO siniestros (poliza_id, fecha_siniestro, descripcion, estado, notas) VALUES (?, ?, ?, ?, ?)", cl)
         
+    # Asegurar tabla configuracion_sistema
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS configuracion_sistema (
+                clave TEXT PRIMARY KEY,
+                valor TEXT
+            )
+        """)
+        default_configs = [
+            ("permitir_busqueda_ssn", "true"),
+            ("permitir_importacion_excel", "true"),
+            ("permitir_vaciar_db", "true"),
+            ("permitir_plan_comercial", "true"),
+            ("permitir_metricas_kpi", "true"),
+            ("permitir_cartera_polizas", "true")
+        ]
+        for key, val in default_configs:
+            cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (clave, valor) VALUES (?, ?)", (key, val))
+    except Exception as e:
+        print(f"Error al crear tabla configuracion_sistema: {e}")
+
     conn.commit()
     conn.close()
 
@@ -2507,7 +2528,31 @@ def vaciar_base_de_datos() -> int:
         return count
     except Exception as e:
         print(f"Error al vaciar base de datos: {e}")
-        return 0
+def obtener_configuraciones() -> dict:
+    """Devuelve todas las configuraciones del sistema en un diccionario."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT clave, valor FROM configuracion_sistema")
+        rows = cursor.fetchall()
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+    except Exception as e:
+        print(f"Error al obtener configuraciones: {e}")
+        return {}
+
+def guardar_configuracion(clave: str, valor: str) -> bool:
+    """Guarda o actualiza una configuración en el sistema."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO configuracion_sistema (clave, valor) VALUES (?, ?)", (clave, valor))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error al guardar configuración {clave}: {e}")
+        return False
 
 def obtener_ultima_actualizacion() -> str:
     """Devuelve la fecha de la última actualización masiva (Excel/CSV)."""

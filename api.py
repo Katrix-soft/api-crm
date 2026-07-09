@@ -1951,3 +1951,24 @@ def api_vaciar_db(current: TokenData = Depends(require_admin)):
         db.registrar_log(current.username, "API_VACIAR_DB_ERROR", f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/configuracion", tags=["Configuración"])
+def api_obtener_configuraciones(current: TokenData = Depends(get_current_user)):
+    """
+    Obtener la configuración global del sistema (disponible para todos los usuarios autenticados).
+    """
+    return db.obtener_configuraciones()
+
+
+@app.post("/configuracion", response_model=MessageResponse, tags=["Configuración"])
+def api_guardar_configuracion(req: ConfigUpdateRequest, current: TokenData = Depends(require_admin)):
+    """
+    Actualizar un parámetro de configuración del sistema (sólo Administradores).
+    """
+    ok = db.guardar_configuracion(req.clave, req.valor)
+    if not ok:
+        raise HTTPException(status_code=500, detail="No se pudo guardar la configuración.")
+    db.registrar_log(current.username, "API_SET_CONFIG", f"Clave: {req.clave}, Valor: {req.valor}")
+    return MessageResponse(ok=True, message=f"Configuración '{req.clave}' actualizada con éxito.")
+
+

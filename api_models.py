@@ -424,4 +424,10 @@ class ResetPasswordRequest(BaseModel):
     token: str
     password: str = Field(..., min_length=6)
 
+# ─── Configuración del Sistema ───────────────────────────────────────────────
+class ConfigUpdateRequest(BaseModel):
+    clave: str
+    valor: str
+
+
 

@@ -309,6 +309,7 @@
     <button class="tab-btn" id="navTabCrmUsers" data-tab="tab-crm-usuarios" style="display:none;">📱 Usuarios App</button>
     <button class="tab-btn" id="navTabSesiones" data-tab="tab-sesiones" style="display:none;">🌐 Sesiones Activas</button>
     <button class="tab-btn" id="navTabLogs" data-tab="tab-logs" style="display:none;">📋 Logs de Auditoría</button>
+    <button class="tab-btn" id="navTabConfigCRM" data-tab="tab-config-crm" style="display:none;">⚙️ Config. CRM</button>
     <button class="tab-btn" id="navTabGuia" data-tab="tab-guia">📚 Guía de Uso</button>
   </div>
 
@@ -593,6 +594,15 @@
         </tbody>
       </table>
       <p class="empty" id="emptyLogsMsg" style="display:none;">No se encontraron logs.</p>
+    </div>
+  </div>
+
+  <!-- Tab: Configuración CRM -->
+  <div id="tab-config-crm" class="tab-content">
+    <h2 style="margin-bottom:6px;">Configuración del CRM</h2>
+    <p style="color:var(--muted); font-size:13px; margin-bottom:20px;">Habilitá o deshabilitá funcionalidades del sistema para todos los usuarios del CRM (Katrix ERP). Los cambios aplican en tiempo real.</p>
+    <div id="configCrmList" style="display:flex; flex-direction:column; gap:10px; max-width:680px;">
+      <div style="text-align:center; padding:30px; color:var(--muted);">Cargando configuración...</div>
     </div>
   </div>
 
@@ -1064,9 +1074,11 @@ function mostrarDashboard(){
     $("navTabCrmUsers").style.display = "inline-flex";
     $("navTabSesiones").style.display = "inline-flex";
     $("navTabLogs").style.display = "inline-flex";
+    $("navTabConfigCRM").style.display = "inline-flex";
   } else {
     $("navTabUsers").style.display = "none";
     $("navTabCrmUsers").style.display = "none";
+    $("navTabConfigCRM").style.display = "none";
     
     if (hasPerm("ver_sesiones")) {
       $("navTabSesiones").style.display = "inline-flex";
@@ -1889,8 +1901,6 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
   const fecha = $("fFecha").value;
   const limite = Number($("fLimite").value) || 1;
 
-  const integraciones = $("fIntegraciones").value.trim() || null;
-
   if (!cliente || !email || !fecha){
     showToast("Completá cliente, email y fecha de expiración.", true);
     return;
@@ -1907,8 +1917,7 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
           limite_dispositivos: limite,
           dispositivo_id: lic ? lic.dispositivo_id || null : null,
           motivo: lic ? lic.motivo || null : null,
-          dispositivos_info: lic ? lic.dispositivos_info || null : null,
-          integraciones: integraciones
+          dispositivos_info: lic ? lic.dispositivos_info || null : null
         }),
       });
       showToast("Licencia actualizada.");
@@ -1975,6 +1984,8 @@ function switchTab(tabId) {
     sesionInterval = setInterval(cargarSesionesActivas, 5000);
   } else if (tabId === 'tab-logs') {
     cargarLogsAuditoria();
+  } else if (tabId === 'tab-config-crm') {
+    cargarConfigCRM();
   }
 }
 
@@ -1990,6 +2001,66 @@ $("btnManageUsers").addEventListener("click", () => {
   switchTab("tab-usuarios");
 });
 
+
+/* ---------------- TAB: CONFIGURACIÓN CRM ---------------- */
+
+const CONFIG_CRM_LABELS = {
+  permitir_busqueda_ssn: { label: "Buscador SSN en Tiempo Real", desc: "Permite consultas y resolución de captcha al padrón de la SSN." },
+  permitir_importacion_excel: { label: "Importación de Padrones", desc: "Habilita subir archivos Excel/CSV para la actualización masiva." },
+  permitir_vaciar_db: { label: "Vaciado de Base de Datos", desc: "Muestra el botón para vaciar productores en Administración." },
+  permitir_cartera_polizas: { label: "Módulo de Cartera & Pólizas", desc: "Habilita la gestión de Clientes, Pólizas y Siniestros." },
+  permitir_metricas_kpi: { label: "Módulo de Métricas & KPI", desc: "Habilita la pestaña de analítica, distribución de ramos y comisiones." },
+  permitir_plan_comercial: { label: "Módulo de Plan Comercial", desc: "Habilita el seguimiento mensual de visitas y captación." }
+};
+
+async function cargarConfigCRM() {
+  const container = $("configCrmList");
+  container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--muted);">Cargando...</div>`;
+  try {
+    const configs = await apiFetch("/configuracion");
+    container.innerHTML = "";
+    Object.entries(CONFIG_CRM_LABELS).forEach(([clave, meta]) => {
+      const valor = configs[clave];
+      const isOn = valor !== "false";
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:14px 18px;";
+      row.innerHTML = `
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size:14px;">${meta.label}</div>
+          <div style="font-size:12px; color:var(--muted); margin-top:3px;">${meta.desc}</div>
+        </div>
+        <label style="position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; margin-left:20px;">
+          <input type="checkbox" id="cfg_panel_${clave}" ${isOn ? "checked" : ""} style="opacity:0; width:0; height:0;">
+          <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:${isOn ? "#4f46e5" : "rgba(255,255,255,0.1)"}; border-radius:24px; transition:0.3s;">
+            <span style="position:absolute; content:''; height:16px; width:16px; left:${isOn ? "22px" : "4px"}; bottom:4px; background:white; border-radius:50%; transition:0.3s;"></span>
+          </span>
+        </label>
+      `;
+      const toggle = row.querySelector(`#cfg_panel_${clave}`);
+      toggle.addEventListener("change", async (e) => {
+        const nuevoValor = e.target.checked ? "true" : "false";
+        try {
+          await apiFetch("/configuracion", {
+            method: "POST",
+            body: JSON.stringify({ clave, valor: nuevoValor })
+          });
+          showToast(`'${meta.label}' ${e.target.checked ? "habilitado" : "deshabilitado"}.`);
+          // Update slider color
+          const sliderSpan = row.querySelector("span");
+          const knobSpan = row.querySelector("span span");
+          sliderSpan.style.background = e.target.checked ? "#4f46e5" : "rgba(255,255,255,0.1)";
+          knobSpan.style.left = e.target.checked ? "22px" : "4px";
+        } catch(err) {
+          showToast("Error al guardar: " + err.message, true);
+          e.target.checked = !e.target.checked;
+        }
+      });
+      container.appendChild(row);
+    });
+  } catch(err) {
+    container.innerHTML = `<div style="color:#ef4444; padding:20px;">Error al cargar configuración: ${err.message}</div>`;
+  }
+}
 
 /* ---------------- TAB 2.5: GESTIÓN DE USUARIOS APP (CRM) ---------------- */
 let tabCrmUsers = [];
