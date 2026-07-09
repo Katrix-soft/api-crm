@@ -803,6 +803,7 @@
 let API_BASE = "";
 let TOKEN = "";
 let USER = null;
+let sesionInterval = null;
 let licencias = [];
 let chartExpInstance = null;
 let chartProdInstance = null;
@@ -1939,7 +1940,7 @@ $("btnGuardarModal").addEventListener("click", async ()=>{
 
 /* ---------------- TABS NAVIGATION & MULTI-ROLE SECTIONS ---------------- */
 
-let sesionInterval = null;
+// let sesionInterval = null;
 
 // Switch tab function
 function switchTab(tabId) {
