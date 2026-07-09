@@ -2528,6 +2528,8 @@ def vaciar_base_de_datos() -> int:
         return count
     except Exception as e:
         print(f"Error al vaciar base de datos: {e}")
+        return 0
+
 def obtener_configuraciones() -> dict:
     """Devuelve todas las configuraciones del sistema en un diccionario."""
     try:
