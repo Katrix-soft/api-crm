@@ -10,7 +10,7 @@ if venv_site not in sys.path:
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,20 +92,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — ajustá los orígenes a tu dominio real en producción
-ALLOWED_ORIGINS = os.getenv(
-    "KATRIX_CORS_ORIGINS",
-    "http://localhost,http://localhost:3000,http://localhost:8080"
-).split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
@@ -116,6 +102,35 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# CORS — ajustá los orígenes a tu dominio real en producción
+ALLOWED_ORIGINS = os.getenv(
+    "KATRIX_CORS_ORIGINS",
+    "http://localhost,http://localhost:3000,http://localhost:8080,tauri://localhost,http://tauri.localhost"
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    import traceback
+    print(f"📥 Incoming Request: {request.method} {request.url.path}")
+    print(f"   Headers: {dict(request.headers)}")
+    print(f"   Client: {request.client}")
+    try:
+        response = await call_next(request)
+        print(f"📤 Response Status: {response.status_code}")
+        return response
+    except Exception as e:
+        print(f"💥 Exception in request: {e}")
+        traceback.print_exc()
+        raise e
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -1883,6 +1898,56 @@ def health():
             "logs": ["/logs/"],
             "licencias": ["/licencias/validar", "/licencias/"],
             "panel": ["/panel"],
+            "mantenimiento": ["/mantenimiento/importar-excel", "/mantenimiento/vaciar-db"],
         }
     }
+
+
+@app.post("/mantenimiento/importar-excel", tags=["Mantenimiento"])
+async def api_importar_excel(file: UploadFile = File(...), current: TokenData = Depends(require_admin)):
+    """
+    Importar un padrón de productores (en formato .xlsx, .xlsm o .csv).
+    """
+    import tempfile
+    import shutil
+    
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in [".xlsx", ".xlsm", ".csv"]:
+        raise HTTPException(status_code=400, detail="Formato de archivo no soportado. Debe ser .xlsx, .xlsm o .csv")
+        
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+            
+        try:
+            registros_insertados, incompletos = db.parsear_e_importar_archivo(tmp_path)
+            db.registrar_log(current.username, "API_IMPORT_EXCEL", f"Archivo: {filename}, Insertados: {registros_insertados}")
+            return {
+                "ok": True,
+                "message": f"Se importaron {registros_insertados} registros.",
+                "insertados": registros_insertados,
+                "incompletos": incompletos
+            }
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    except Exception as e:
+        db.registrar_log(current.username, "API_IMPORT_EXCEL_ERROR", f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/mantenimiento/vaciar-db", response_model=MessageResponse, tags=["Mantenimiento"])
+def api_vaciar_db(current: TokenData = Depends(require_admin)):
+    """
+    Vacía por completo la tabla de productores locales (productores_detalle) en la base de datos.
+    """
+    try:
+        eliminados = db.vaciar_base_de_datos()
+        db.registrar_log(current.username, "API_VACIAR_DB", f"Registros eliminados: {eliminados}")
+        return MessageResponse(ok=True, message=f"Base de datos local vaciada con éxito. Registros eliminados: {eliminados}")
+    except Exception as e:
+        db.registrar_log(current.username, "API_VACIAR_DB_ERROR", f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
