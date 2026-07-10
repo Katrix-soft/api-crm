@@ -2089,6 +2089,10 @@ def resolver_captcha(site_key: str) -> str:
 # ─── PASO 2: POST al SSN con el token ─────────────────────
 def buscar_en_ssn(documento: str, tipo_doc: str = "DNI", token: str = "") -> str:
     print(f"Iniciando Paso 2: Buscando {tipo_doc} {documento} en SSN...")
+    if not token:
+        print("  [Captchas] Token de captcha no suministrado. Resolviendo automáticamente...")
+        sitekey = obtener_sitekey()
+        token = resolver_captcha(sitekey)
 
     proxies = obtener_proxies_activos()
     headers = obtener_headers_seguros()
@@ -3576,7 +3580,7 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
     conn.close()
 
     if not row:
-        return {"valid": False, "message": "Clave de licencia inexistente", "cliente": "", "fecha_expiracion": "", "producto": ""}
+        return {"valid": False, "message": "Clave de licencia inexistente", "cliente": "", "fecha_expiracion": "", "producto": "", "limite_dispositivos": 0}
 
     lic = dict(row)
 
@@ -3585,7 +3589,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         motivo_str = f" (Motivo: {lic['motivo']})" if lic.get("motivo") else ""
         return {"valid": False, "message": f"La licencia está {lic['estado']}{motivo_str}",
                 "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
-                "producto": lic.get("producto", "")}
+                "producto": lic.get("producto", ""),
+                "limite_dispositivos": lic.get("limite_dispositivos", 0)}
 
     # 3. Verificar expiración
     from datetime import datetime
@@ -3593,7 +3598,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         if datetime.strptime(lic["fecha_expiracion"], "%Y-%m-%d") < datetime.now():
             return {"valid": False, "message": "La licencia ha expirado",
                     "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
-                    "producto": lic.get("producto", "")}
+                    "producto": lic.get("producto", ""),
+                    "limite_dispositivos": lic.get("limite_dispositivos", 0)}
     except Exception:
         pass
 
@@ -3602,7 +3608,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
     if email_registrado and email_cliente and email_registrado != email_cliente.strip().lower():
         return {"valid": False, "message": "Email no coincide con la licencia",
                 "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
-                "producto": lic.get("producto", "")}
+                "producto": lic.get("producto", ""),
+                "limite_dispositivos": lic.get("limite_dispositivos", 0)}
 
     # 5. Verificar dispositivos
     registered_devices = [d.strip() for d in (lic["dispositivo_id"] or "").split(",") if d.strip()]
@@ -3621,7 +3628,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
                 "valid": False,
                 "message": f"Límite de dispositivos alcanzado ({lic['limite_dispositivos']})",
                 "cliente": lic["cliente"], "fecha_expiracion": lic["fecha_expiracion"],
-                "producto": lic.get("producto", "")
+                "producto": lic.get("producto", ""),
+                "limite_dispositivos": lic["limite_dispositivos"]
             }
         registered_devices.append(dispositivo_id)
         db_update_needed = True
@@ -3678,7 +3686,8 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         "cliente": lic["cliente"],
         "fecha_expiracion": lic["fecha_expiracion"],
         "producto": lic.get("producto", "CRM"),
-        "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software")
+        "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software"),
+        "limite_dispositivos": lic.get("limite_dispositivos", 1)
     }
 
 
