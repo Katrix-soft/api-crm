@@ -1829,18 +1829,7 @@ $("btnDesvincularTodos").addEventListener("click", async () => {
     message: `¿Desvincular TODOS los dispositivos de la licencia de "${lic.cliente}"?`,
     onAccept: async () => {
       try {
-        await apiFetch(`/licencias/${lic.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            cliente: lic.cliente,
-            fecha_expiracion: lic.fecha_expiracion,
-            estado: lic.estado,
-            limite_dispositivos: lic.limite_dispositivos,
-            dispositivo_id: "",
-            motivo: lic.motivo || null,
-            dispositivos_info: "{}"
-          })
-        });
+        await apiFetch(`/licencias/${lic.id}/dispositivos`, { method: "DELETE" });
         showToast("Todos los dispositivos desvinculados.");
         $("modalDispositivosOverlay").style.display = "none";
         await cargarLicencias();
@@ -1859,34 +1848,11 @@ async function desvincularDispositivo(devId) {
     title: "Desvincular Dispositivo",
     message: `¿Desvincular este dispositivo de la licencia?`,
     onAccept: async () => {
-      let info = {};
       try {
-        info = JSON.parse(lic.dispositivos_info || '{}');
-      } catch(e) {}
-      
-      delete info[devId];
-      
-      const registered = (lic.dispositivo_id || "").split(",").map(x => x.trim()).filter(x => x && x !== devId);
-      
-      try {
-        await apiFetch(`/licencias/${lic.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            cliente: lic.cliente,
-            fecha_expiracion: lic.fecha_expiracion,
-            estado: lic.estado,
-            limite_dispositivos: lic.limite_dispositivos,
-            dispositivo_id: registered.join(",") || "",
-            motivo: lic.motivo || null,
-            dispositivos_info: JSON.stringify(info)
-          })
-        });
+        await apiFetch(`/licencias/${lic.id}/dispositivos/${encodeURIComponent(devId)}`, { method: "DELETE" });
         showToast("Dispositivo desvinculado.");
         $("modalDispositivosOverlay").style.display = "none";
         await cargarLicencias();
-        if (registered.length > 0) {
-          mostrarDispositivos(lic.id);
-        }
       } catch(err) {
         showToast(err.message, true);
       }

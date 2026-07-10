@@ -1453,6 +1453,56 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
     return MessageResponse(ok=True, message="Licencia actualizada")
 
 
+@app.delete("/licencias/{lic_id}/dispositivos", response_model=MessageResponse, tags=["Licencias de Software"])
+def api_desvincular_todos_dispositivos(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
+    """Desvincula TODOS los dispositivos de una licencia. Limpia dispositivo_id y dispositivos_info."""
+    check_panel_permission(current.username, current.role, "desvincular_dispositivo")
+    lic = db.obtener_licencia_por_id(lic_id)
+    if not lic:
+        raise HTTPException(status_code=404, detail="Licencia no encontrada")
+    conn = __import__("sqlite3").connect(db.DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE licencias SET dispositivo_id = '', dispositivos_info = '{}' WHERE id = ?",
+            (lic_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    db.registrar_log(current.username, "DESVINCULAR_TODOS", f"Licencia ID {lic_id}: todos los dispositivos desvinculados")
+    return {"message": "Todos los dispositivos han sido desvinculados."}
+
+
+@app.delete("/licencias/{lic_id}/dispositivos/{device_id}", response_model=MessageResponse, tags=["Licencias de Software"])
+def api_desvincular_dispositivo(lic_id: int, device_id: str, current: TokenData = Depends(require_licencias_admin)):
+    """Desvincula un dispositivo específico de una licencia."""
+    check_panel_permission(current.username, current.role, "desvincular_dispositivo")
+    lic = db.obtener_licencia_por_id(lic_id)
+    if not lic:
+        raise HTTPException(status_code=404, detail="Licencia no encontrada")
+    import json as _json
+    registered = [d.strip() for d in (lic.get("dispositivo_id") or "").split(",") if d.strip()]
+    if device_id in registered:
+        registered.remove(device_id)
+    info = {}
+    try:
+        info = _json.loads(lic.get("dispositivos_info") or "{}")
+    except Exception:
+        pass
+    info.pop(device_id, None)
+    conn = __import__("sqlite3").connect(db.DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE licencias SET dispositivo_id = ?, dispositivos_info = ? WHERE id = ?",
+            (",".join(registered) or "", _json.dumps(info), lic_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    db.registrar_log(current.username, "DESVINCULAR_DISPOSITIVO", f"Licencia ID {lic_id}: dispositivo {device_id} desvinculado")
+    return {"message": f"Dispositivo desvinculado correctamente."}
+
+
 @app.delete("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
 def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
     """Elimina una licencia. Solo admin."""
