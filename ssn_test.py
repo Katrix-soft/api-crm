@@ -448,8 +448,26 @@ def obtener_proxies_activos() -> dict:
         proxies["https"] = https_proxy
     return proxies
 
-DB_DIR = "data"
-DB_PATH = os.path.join(DB_DIR, "productores_scraped.db")
+# Calcular rutas absolutas para evitar problemas con el CWD al lanzar desde Tauri
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_local_data_dir = os.path.join(_script_dir, "data")
+_parent_data_dir = os.path.join(_script_dir, "..", "data")
+
+_local_db = os.path.join(_local_data_dir, "productores_scraped.db")
+_parent_db = os.path.normpath(os.path.join(_parent_data_dir, "productores_scraped.db"))
+
+# Usar la DB que tenga datos reales (priorizar la local, fallback al directorio padre)
+# Umbral de 1MB para distinguir DB con datos reales de DBs vacías con solo tablas (~266KB)
+if os.path.exists(_local_db) and os.path.getsize(_local_db) > 1_000_000:
+    DB_DIR = _local_data_dir
+    DB_PATH = _local_db
+elif os.path.exists(_parent_db) and os.path.getsize(_parent_db) > 1_000_000:
+    DB_DIR = os.path.normpath(_parent_data_dir)
+    DB_PATH = _parent_db
+else:
+    DB_DIR = _local_data_dir
+    DB_PATH = _local_db
+print(f"DATABASE RESOLVED PATH: {DB_PATH} (exists={os.path.exists(DB_PATH)}, size={os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0})", flush=True)
 CSV_URL = "https://datosabiertos.ssn.gob.ar/dataset/be4927ba-6b6d-4cee-b33e-5319b33b15b8/resource/07de24f8-4191-497e-a0da-da83cf5eb5d9/download/productores-asesores.csv"
 CSV_PATH_LOCAL = os.path.join(DB_DIR, "productores-asesores.csv")
 CSV_PATH_ROOT = "productores-asesores.csv"
@@ -882,13 +900,14 @@ def inicializar_db():
     except sqlite3.OperationalError:
         pass
 
-    # Insertar licencia de prueba por defecto si no hay licencias
-    cursor.execute("SELECT COUNT(*) FROM licencias")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-            INSERT INTO licencias (clave, cliente, fecha_expiracion, estado, limite_dispositivos)
-            VALUES (?, ?, ?, ?, ?)
-        """, ("KTX-TEST-VALID-2026", "Cliente Prueba", "2030-12-31", "activa", 2))
+    # Asegurar que la clave de producción usada localmente también sea válida para desarrollo sin fricción
+    for license_key in ["KTX-CRM-DQUK-LEQD-73A2", "KTX-CRM-DQUK-LEGD-73A2"]:
+        cursor.execute("SELECT COUNT(*) FROM licencias WHERE clave = ?", (license_key,))
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO licencias (clave, cliente, fecha_expiracion, estado, limite_dispositivos)
+                VALUES (?, ?, ?, ?, ?)
+            """, (license_key, "Cliente Desarrollo", "2030-12-31", "activa", 10))
     # ─────────────────────────────────────────────────────────────────────
 
     # Insertar usuarios por defecto si no existen
@@ -1423,7 +1442,7 @@ def obtener_total_cached() -> int:
         return 0
 
 
-def obtener_todos_db(user_id: int = None, role: str = None) -> list[dict]:
+def obtener_todos_db(user_id: int = None, role: str = None, regional_only: bool = False) -> list[dict]:
     """Retorna todos los productores en el cache SQLite con filtrado de roles."""
     if not os.path.exists(DB_PATH):
         return []
@@ -1431,9 +1450,10 @@ def obtener_todos_db(user_id: int = None, role: str = None) -> list[dict]:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        regional_clause = "AND UPPER(p.provincia) IN ('MENDOZA', 'SAN JUAN', 'SAN LUIS')" if regional_only else ""
         # High performance query utilizing LEFT JOIN and GROUP_CONCAT to fetch all associated societies in a single trip (Eloquent style)
         if role == "agente" and user_id is not None:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
@@ -1441,13 +1461,14 @@ def obtener_todos_db(user_id: int = None, role: str = None) -> list[dict]:
                 FROM productores_detalle p
                 LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
                 LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
-                WHERE p.usuario_id = ? 
+                WHERE (p.usuario_id = ? 
                    OR p.usuario_id IN (SELECT usuario_propietario_id FROM permisos_visibilidad WHERE usuario_lector_id = ?)
-                   OR p.usuario_id IS NULL
+                   OR p.usuario_id IS NULL)
+                  {regional_clause}
                 GROUP BY p.matricula
             """, (user_id, user_id))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
@@ -1455,6 +1476,7 @@ def obtener_todos_db(user_id: int = None, role: str = None) -> list[dict]:
                 FROM productores_detalle p
                 LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
                 LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
+                WHERE 1=1 {regional_clause}
                 GROUP BY p.matricula
             """)
         rows = cursor.fetchall()
@@ -1465,7 +1487,7 @@ def obtener_todos_db(user_id: int = None, role: str = None) -> list[dict]:
         return []
 
 
-def obtener_cartera_db(user_id: int = None, role: str = None) -> list[dict]:
+def obtener_cartera_db(user_id: int = None, role: str = None, regional_only: bool = False) -> list[dict]:
     """Retorna únicamente los productores calificados para la cartera (con actividad, pólizas o asignados)."""
     if not os.path.exists(DB_PATH):
         return []
@@ -1474,9 +1496,10 @@ def obtener_cartera_db(user_id: int = None, role: str = None) -> list[dict]:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        regional_clause = "AND UPPER(p.provincia) IN ('MENDOZA', 'SAN JUAN', 'SAN LUIS')" if regional_only else ""
         # Filtro de cartera: estado de contacto activo, con pólizas, en visitas, en candidatos, o asignado a un usuario
         # Se requiere nombre válido para no tener vacíos al principio y restringir a Mendoza y San Juan.
-        cartera_filter = """
+        cartera_filter = f"""
             (
                 (p.estado_contacto NOT IN ('Sin contactar', 'Sin contacto', '') AND p.estado_contacto IS NOT NULL)
                 OR p.usuario_id IS NOT NULL
@@ -1485,7 +1508,7 @@ def obtener_cartera_db(user_id: int = None, role: str = None) -> list[dict]:
                 OR p.matricula IN (SELECT DISTINCT matricula FROM candidatos_captacion)
             )
             AND p.nombre IS NOT NULL AND p.nombre != '' AND p.nombre != '—'
-            AND UPPER(p.provincia) IN ('MENDOZA', 'SAN JUAN')
+            {regional_clause}
         """
         
         if role == "agente" and user_id is not None:
