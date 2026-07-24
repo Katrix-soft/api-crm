@@ -1470,7 +1470,21 @@ def redirect_to_docs():
     return RedirectResponse(url="/docs")
 
 
+@app.get("/check-update", tags=["Sistema"])
+def check_update():
+    """Retorna la última versión disponible del ejecutable Katrix Broker CRM."""
+    return {
+        "latest_version": os.getenv("LATEST_VERSION", "1.0.19"),
+        "download_url": os.getenv(
+            "LATEST_DOWNLOAD_URL", 
+            "https://github.com/Katrix-soft/crm-ssn/releases/download/v1.0.19/KatrixBroker.exe"
+        ),
+        "release_notes": "Actualización masiva v1.0.19: Base de datos unificada de 54.000+ PAS, auto-reconexión PostgreSQL y soporte directo."
+    }
+
+
 @app.get("/health", tags=["Sistema"])
+
 def health():
     """Verificar que la API está funcionando."""
     return {
