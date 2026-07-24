@@ -1461,6 +1461,15 @@ def api_soporte_ticket(request: Request, body: SoporteTicketRequest):
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 
+from fastapi.responses import RedirectResponse
+
+@app.get("/", include_in_schema=False)
+@app.get("/panel", include_in_schema=False)
+def redirect_to_docs():
+    """Redirige automáticamente la raíz y /panel a la documentación Swagger de la API."""
+    return RedirectResponse(url="/docs")
+
+
 @app.get("/health", tags=["Sistema"])
 def health():
     """Verificar que la API está funcionando."""
@@ -1486,6 +1495,7 @@ def health():
             "mercantil": ["/mercantil/test-auth"],
         }
     }
+
 
 
 # ─── MERCANTIL ANDINA (INTEGRACION DE PRUEBAS) ────────────────────────────────
