@@ -138,6 +138,20 @@ def login(request: Request, body: LoginRequest):
     )
 
 
+@app.post("/panel/auth/login", response_model=Token, tags=["Auth"])
+@limiter.limit("10/minute")
+def panel_login(request: Request, body: LoginRequest):
+    """Permite el inicio de sesión desde el Panel Web de Administración."""
+    return login(request, body)
+
+
+@app.get("/panel/auth/biometrics/credentials", tags=["Auth"])
+def panel_biometrics_credentials():
+    """Retorna credenciales biométricas registradas."""
+    return []
+
+
+
 @app.get("/auth/me", response_model=PerfilResponse, tags=["Auth"])
 def get_me(current: TokenData = Depends(get_current_user)):
     """Retorna el perfil del usuario autenticado."""

@@ -1009,9 +1009,10 @@ async function login(){
       throw new Error(j.detail || "Usuario o contraseña incorrectos");
     }
     const data = await res.json();
-    if (data.role !== "panel_admin" && data.role !== "panel_superadmin"){
+    if (data.role !== "panel_admin" && data.role !== "panel_superadmin" && data.role !== "admin"){
       throw new Error("Acceso denegado: rol de administrador del panel requerido.");
     }
+
     TOKEN = data.access_token;
     USER = data;
     sessionStorage.setItem("katrix_token", TOKEN);
