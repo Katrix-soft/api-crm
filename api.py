@@ -108,41 +108,56 @@ def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
 # ─── AUTH ────────────────────────────────────────────────────────────────────
 
 @app.post("/auth/login", response_model=Token, tags=["Auth"])
-@limiter.limit("5/minute")
-def login(request: Request, body: LoginRequest):
+@app.post("/panel/auth/login", response_model=Token, tags=["Auth"])
+@limiter.limit("15/minute")
+async def login(request: Request):
+    username = None
+    password = None
+    try:
+        data = await request.json()
+        if isinstance(data, dict):
+            username = data.get("username")
+            password = data.get("password")
+    except Exception:
+        pass
+
+    if not username or not password:
+        try:
+            form = await request.form()
+            username = form.get("username")
+            password = form.get("password")
+        except Exception:
+            pass
+
+    if not username or not password:
+        raise HTTPException(status_code=422, detail="Se requiere usuario y contraseña")
+
     success, requiere_cambio, error_msg, rol, user_id = db.verificar_login_status(
-        body.username, body.password
+        username, password
     )
     if not success:
         raise HTTPException(status_code=401, detail=error_msg or "Usuario o contraseña incorrectos")
 
-    # Obtener datos del usuario para el token
     usuarios = db.obtener_usuarios()
-    user = next((u for u in usuarios if u.get("email") == body.username or u.get("usuario") == body.username), None)
-    
+    user = next((u for u in usuarios if u.get("email") == username or u.get("usuario") == username), None) or {}
+
     token = create_token({
         "user_id":  user_id,
-        "username": user.get("usuario") or user.get("email"),
+        "username": user.get("usuario") or user.get("email") or username,
         "role":     rol,
         "matricula": user.get("matricula_asociada"),
     })
 
-    db.registrar_log(body.username, "API_LOGIN", "Login desde API REST")
+    db.registrar_log(username, "API_LOGIN", "Login desde API REST")
 
     return Token(
         access_token=token,
         token_type="bearer",
         role=rol,
         user_id=user_id,
-        username=user.get("usuario") or user.get("email"),
+        username=user.get("usuario") or user.get("email") or username,
     )
 
-
-@app.post("/panel/auth/login", response_model=Token, tags=["Auth"])
-@limiter.limit("10/minute")
-def panel_login(request: Request, body: LoginRequest):
-    """Permite el inicio de sesión desde el Panel Web de Administración."""
-    return login(request, body)
 
 
 @app.get("/panel/auth/biometrics/credentials", tags=["Auth"])
