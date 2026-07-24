@@ -1344,10 +1344,15 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
 
 
 @app.get("/licencias/", response_model=List[LicenciaResponse], tags=["Licencias de Software"])
-def api_list_licencias(current: TokenData = Depends(require_admin)):
-    """Lista todas las licencias del sistema. Solo admin."""
-    lics = db.obtener_licencias()
+def api_list_licencias(
+    q: Optional[str] = Query(None, description="Búsqueda por cliente, email o clave"),
+    limit: int = Query(2000, ge=1, le=10000),
+    current: TokenData = Depends(require_admin)
+):
+    """Lista licencias del sistema. Solo admin."""
+    lics = db.obtener_licencias(limit=limit, search=q)
     return [LicenciaResponse(**l) for l in lics]
+
 
 
 @app.post("/licencias/", response_model=MessageResponse, tags=["Licencias de Software"])

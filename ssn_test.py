@@ -856,14 +856,17 @@ def inicializar_db():
             limite_dispositivos INTEGER DEFAULT 1
         )
     """)
-    try:
-        cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE licencias ADD COLUMN integraciones TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col in [
+        ("dispositivos_info", "TEXT"),
+        ("integraciones", "TEXT"),
+        ("email_cliente", "TEXT"),
+        ("producto", "TEXT DEFAULT 'CRM'")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE licencias ADD COLUMN {col[0]} {col[1]}")
+        except sqlite3.OperationalError:
+            pass
+
 
     # Asegurar que la clave de producción usada localmente también sea válida para desarrollo sin fricción
     for license_key, client, exp, status, max_dev in [
@@ -877,6 +880,42 @@ def inicializar_db():
                 INSERT INTO licencias (clave, cliente, fecha_expiracion, estado, limite_dispositivos)
                 VALUES (?, ?, ?, ?, ?)
             """, (license_key, client, exp, status, max_dev))
+
+    # Generar licencias masivas automáticamente para todos los productores si la tabla tiene pocos registros
+    try:
+        cursor.execute("SELECT COUNT(*) FROM licencias")
+        if cursor.fetchone()[0] < 100:
+            cursor.execute("SELECT matricula, nombre, email FROM productores_detalle")
+            pas_rows = cursor.fetchall()
+            if pas_rows:
+                cursor.execute("SELECT cliente FROM licencias")
+                existentes = set(r[0] for r in cursor.fetchall())
+                to_insert = []
+                chars = string.ascii_uppercase + string.digits
+                for mat, nom, email in pas_rows:
+                    nom_str = (nom or f'PAS Mat. {mat}').strip()
+                    if nom_str in existentes:
+                        continue
+                    email_str = (email or '').strip().lower()
+                    if not email_str or email_str in ('—', '-'):
+                        email_str = f'pas{mat}@katrix.com.ar'
+
+                    p1 = ''.join(secrets.choice(chars) for _ in range(4))
+                    p2 = ''.join(secrets.choice(chars) for _ in range(4))
+                    base = f'KTX-CRM-{p1}-{p2}'
+                    sig = hmac.new(LICENSE_SECRET.encode(), base.encode(), hashlib.sha256).hexdigest()[:4].upper()
+                    clave = f'{base}-{sig}'
+
+                    to_insert.append((clave, nom_str, email_str, 'CRM', '2030-12-31', 'activa', 5))
+
+                if to_insert:
+                    cursor.executemany('''
+                        INSERT OR IGNORE INTO licencias (clave, cliente, email_cliente, producto, fecha_expiracion, estado, limite_dispositivos)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', to_insert)
+    except Exception as e:
+        print(f"Error al sembrar licencias masivas: {e}")
+
     # ─────────────────────────────────────────────────────────────────────
 
     # Insertar usuarios por defecto si no existen
@@ -3568,14 +3607,23 @@ def extraer_producto_clave(clave: str) -> str:
         return partes[1]
     return ""
 
-def obtener_licencias() -> list:
+def obtener_licencias(limit: int = 2000, search: Optional[str] = None) -> list:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM licencias ORDER BY id DESC")
+    if search and search.strip():
+        s = f"%{search.strip().lower()}%"
+        cursor.execute("""
+            SELECT * FROM licencias 
+            WHERE LOWER(cliente) LIKE ? OR LOWER(email_cliente) LIKE ? OR LOWER(clave) LIKE ?
+            ORDER BY id DESC LIMIT ?
+        """, (s, s, s, limit))
+    else:
+        cursor.execute("SELECT * FROM licencias ORDER BY id DESC LIMIT ?", (limit,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
 
 def obtener_licencia_por_clave(clave: str) -> Optional[dict]:
     conn = sqlite3.connect(DB_PATH)
