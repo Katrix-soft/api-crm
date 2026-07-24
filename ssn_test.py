@@ -1473,6 +1473,69 @@ def obtener_todos_db(user_id: int = None, role: str = None, regional_only: bool 
         return []
 
 
+def guardar_pas_masivos(records: list[dict]):
+    """Guarda o actualiza en la DB SQLite local los registros de PAS provenientes de la API o CSV."""
+    if not records:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    inicializar_db()
+    
+    to_upsert = []
+    for r in records:
+        mat = str(r.get("matricula", "")).strip()
+        if not mat:
+            continue
+        to_upsert.append((
+            mat,
+            r.get("nombre", ""),
+            r.get("documento", ""),
+            r.get("cuit", ""),
+            r.get("ramo", "Patrimoniales y Vida"),
+            r.get("provincia", ""),
+            r.get("telefono", ""),
+            r.get("email", ""),
+            r.get("resolucion", ""),
+            r.get("fecha_resolucion", ""),
+            r.get("domicilio", ""),
+            r.get("localidad", ""),
+            r.get("cod_postal", ""),
+            r.get("estado_contacto", "Sin contactar"),
+            r.get("observaciones", ""),
+            r.get("companias", "")
+        ))
+
+    cursor.executemany("""
+        INSERT INTO productores_detalle (
+            matricula, nombre, documento, cuit, ramo, provincia, telefono, email,
+            resolucion, fecha_resolucion, domicilio, localidad, cod_postal,
+            estado_contacto, observaciones, companias
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(matricula) DO UPDATE SET
+            nombre=EXCLUDED.nombre,
+            documento=EXCLUDED.documento,
+            cuit=EXCLUDED.cuit,
+            ramo=EXCLUDED.ramo,
+            provincia=EXCLUDED.provincia,
+            telefono=EXCLUDED.telefono,
+            email=EXCLUDED.email,
+            resolucion=EXCLUDED.resolucion,
+            fecha_resolucion=EXCLUDED.fecha_resolucion,
+            domicilio=EXCLUDED.domicilio,
+            localidad=EXCLUDED.localidad,
+            cod_postal=EXCLUDED.cod_postal,
+            estado_contacto=EXCLUDED.estado_contacto,
+            observaciones=EXCLUDED.observaciones,
+            companias=EXCLUDED.companias
+    """, to_upsert)
+
+    conn.commit()
+    conn.close()
+
+
+
+
 def obtener_cartera_db(user_id: int = None, role: str = None, regional_only: bool = False) -> list[dict]:
     """Retorna únicamente los productores calificados para la cartera (con actividad, pólizas o asignados)."""
     if not os.path.exists(DB_PATH):
