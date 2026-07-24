@@ -4,23 +4,14 @@ FastAPI + JWT. Admin: CRUD completo. Agente: solo lectura.
 Arrancar con: uvicorn api:app --host 0.0.0.0 --port 8000
 """
 import os, sys
-venv_site = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".venv", "lib", "python3.13", "site-packages"))
-if venv_site not in sys.path:
-    sys.path.append(venv_site)
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Depends, status, Query, Request, Response
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    import jwt
-    from jwt import PyJWTError as JWTError
+from jose import JWTError, jwt
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -28,47 +19,6 @@ from slowapi.errors import RateLimitExceeded
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ssn_test as db
 from api_models import *
-import katrix_biometrics
-
-# ─── Pydantic Models para Panel y Biometría ──────────────────────────────────
-class PanelLoginRequest(BaseModel):
-    username: str
-    password: str
-
-class PanelChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-    new_username: Optional[str] = None
-
-class BiometricRegisterRequest(BaseModel):
-    username: str
-    credential_id: str
-    public_key_der: str
-    dispositivo_nombre: str
-    challenge_token: str
-
-class BiometricLoginRequest(BaseModel):
-    credential_id: str
-    signature: str
-    authenticator_data: str
-    client_data_json: str
-    challenge_token: str
-
-class PanelUserCreate(BaseModel):
-    username: str
-    password: str
-    role: str
-    permissions: dict
-
-class PanelUserUpdate(BaseModel):
-    password: Optional[str] = None
-    role: Optional[str] = None
-    permissions: Optional[dict] = None
-
-class PanelUserResponse(BaseModel):
-    username: str
-    role: str
-    permissions: dict
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 SECRET_KEY  = os.getenv("KATRIX_SECRET_KEY", "cambia-esta-clave-en-produccion-2026")
@@ -92,17 +42,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
-
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
 # CORS — ajustá los orígenes a tu dominio real en producción
 ALLOWED_ORIGINS = os.getenv(
     "KATRIX_CORS_ORIGINS",
@@ -112,37 +51,26 @@ ALLOWED_ORIGINS = os.getenv(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://.*|http://tauri\.localhost",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    import traceback
-    print(f"📥 Incoming Request: {request.method} {request.url.path}")
-    print(f"   Headers: {dict(request.headers)}")
-    print(f"   Client: {request.client}")
-    try:
-        response = await call_next(request)
-        print(f"📤 Response Status: {response.status_code}")
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
-    except Exception as e:
-        print(f"💥 Exception in request: {e}")
-        traceback.print_exc()
-        raise e
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-# ─── Panel Sessions tracking in memory ────────────────────────────────────────
-PANEL_SESSIONS = {}
-APP_SESSIONS = {}
-REVOKED_SESSIONS = set()
 
 # ─── JWT Helpers ─────────────────────────────────────────────────────────────
 
@@ -152,7 +80,7 @@ def create_token(data: dict) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> TokenData:
+def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     cred_err = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Token inválido o expirado",
@@ -166,92 +94,15 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> T
         matricula: str = payload.get("matricula")
         if user_id is None or username is None:
             raise cred_err
-            
-        # Validar y registrar sesión si es usuario del panel de licencias
-        if username in REVOKED_SESSIONS:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Tu sesión ha sido revocada por un administrador.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            
-        if role in ["panel_admin", "panel_superadmin", "admin"]:
-            # Registrar/actualizar la actividad en línea
-            client_host = request.client.host if request.client else "Desconocida"
-            user_agent = request.headers.get("user-agent", "Desconocido")
-            PANEL_SESSIONS[username] = {
-                "username": username,
-                "role": role,
-                "ip": client_host,
-                "user_agent": user_agent,
-                "last_active": datetime.utcnow().isoformat(),
-                "status": "online"
-            }
-            
-        # Registrar/actualizar la actividad en la App Flutter
-        if role in ["admin", "agente"]:
-            client_host = request.client.host if request.client else "Desconocida"
-            user_agent = request.headers.get("user-agent", "Desconocido")
-            APP_SESSIONS[username] = {
-                "username": username,
-                "role": role,
-                "ip": client_host,
-                "user_agent": user_agent,
-                "last_active": datetime.utcnow().isoformat(),
-                "status": "online"
-            }
-            
         return TokenData(user_id=user_id, username=username, role=role, matricula=matricula)
     except JWTError:
         raise cred_err
 
 
 def require_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
-    if current.role not in ["admin", "panel_superadmin", "panel_admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requiere rol de administrador para realizar esta acción",
-        )
+    if current.role != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
     return current
-
-
-def require_licencias_admin(current: TokenData = Depends(get_current_user)) -> TokenData:
-    if current.role not in ["admin", "panel_admin", "panel_superadmin"]:
-        raise HTTPException(status_code=403, detail="Se requiere rol de administrador de licencias o administrador general")
-    if current.role in ["panel_admin", "panel_superadmin"]:
-        user = db.obtener_panel_user(current.username)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Usuario de panel inexistente o eliminado",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    return current
-
-
-def check_panel_permission(username: str, role: str, permission: str):
-    if role == "admin":
-        return True  # El admin general del CRM siempre tiene todos los permisos
-    
-    user = db.obtener_panel_user(username)
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario de panel inexistente")
-    
-    if user["role"] == "superadmin":
-        return True  # El superadmin de panel tiene todos los permisos
-        
-    import json
-    try:
-        perms = json.loads(user["permissions"])
-    except Exception:
-        perms = {}
-        
-    if not perms.get(permission, False):
-        raise HTTPException(
-            status_code=403,
-            detail=f"No tenés permiso para realizar esta acción: {permission}"
-        )
-    return True
 
 
 # ─── AUTH ────────────────────────────────────────────────────────────────────
@@ -739,7 +590,7 @@ def list_pas(
         records = [r for r in records if
                    ql in (r.get("nombre") or r.get("productor_apellido_nombre") or "").lower() or
                    ql in (r.get("matricula") or r.get("productor_matricula") or "").lower() or
-                   ql in (r.get("documento") or r.get("cuit") or "").lower()]
+                   ql in (r.get("documento") or r.get("cuit") or r.get("productor_id") or "").lower()]
     if provincia:
         records = [r for r in records if
                    (r.get("provincia") or "").upper() == provincia.upper()]
@@ -819,15 +670,15 @@ def export_pas_csv(
 
     # Si es agente, solo ve su propio perfil
     if current.role != "admin" and current.matricula:
-        records = [r for r in records if (r.get("matricula") or r.get("productor_matricula")) == current.matricula]
+        records = [r for r in records if r.get("productor_matricula") == current.matricula]
 
     # Filtros
     if q:
         ql = q.strip().lower()
         records = [r for r in records if
-                   ql in (r.get("nombre") or r.get("productor_apellido_nombre") or "").lower() or
-                   ql in (r.get("matricula") or r.get("productor_matricula") or "").lower() or
-                   ql in (r.get("documento") or r.get("cuit") or "").lower()]
+                   ql in (r.get("productor_apellido_nombre") or "").lower() or
+                   ql in (r.get("productor_matricula") or "").lower() or
+                   ql in (r.get("productor_id") or "").lower()]
     if provincia:
         records = [r for r in records if
                    (r.get("provincia") or "").upper() == provincia.upper()]
@@ -859,8 +710,8 @@ def export_pas_csv(
     
     for r in records:
         writer.writerow([
-            r.get("matricula") or r.get("productor_matricula") or "",
-            r.get("nombre") or r.get("productor_apellido_nombre") or "",
+            r.get("productor_matricula") or r.get("matricula") or "",
+            r.get("productor_apellido_nombre") or r.get("nombre") or "",
             r.get("cuit") or r.get("documento") or r.get("productor_id") or "",
             r.get("ramo") or "",
             r.get("provincia") or "",
@@ -965,8 +816,6 @@ def buscar_en_ssn(
         try:
             html = db.buscar_en_ssn(documento, tipo_doc)
             parsed = db.parsear_resultado(html) if html else None
-            if parsed and parsed.get("matricula"):
-                db.guardar_en_db(parsed, user_id=current.user_id)
             result_container["data"] = parsed
             result_container["raw_html_len"] = len(html) if html else 0
         except Exception as e:
@@ -1484,7 +1333,6 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
     if forwarded:
         ip = forwarded.split(",")[0].strip()
         
-    print(f"DEBUG api_validar_licencia: key={body.clave!r}, device_id={body.dispositivo_id!r}, email={body.email_cliente!r}, name={body.dispositivo_nombre!r}", flush=True)
     res = db.validar_licencia(
         body.clave, 
         body.dispositivo_id, 
@@ -1492,21 +1340,18 @@ def api_validar_licencia(request: Request, body: LicenciaValidarRequest):
         body.dispositivo_nombre,
         ip_address=ip
     )
-    print(f"DEBUG api_validar_licencia Result: {res}", flush=True)
     return LicenciaValidarResponse(**res)
 
 
 @app.get("/licencias/", response_model=List[LicenciaResponse], tags=["Licencias de Software"])
-def api_list_licencias(current: TokenData = Depends(require_licencias_admin)):
-    """Lista todas las licencias del sistema. Solo admin de licencias."""
-    check_panel_permission(current.username, current.role, "ver_licencias")
+def api_list_licencias(current: TokenData = Depends(require_admin)):
+    """Lista todas las licencias del sistema. Solo admin."""
     lics = db.obtener_licencias()
     return [LicenciaResponse(**l) for l in lics]
 
 
 @app.post("/licencias/", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_licencias_admin)):
-    check_panel_permission(current.username, current.role, "crear_licencia")
+def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(require_admin)):
     producto = body.producto.upper()
     if producto not in ["CRM", "ERP", "POS"]:
         raise HTTPException(status_code=400, detail=f"Producto inválido. Opciones: CRM, ERP, POS")
@@ -1527,20 +1372,9 @@ def api_create_licencia(body: LicenciaCreate, current: TokenData = Depends(requi
 
 
 @app.put("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = Depends(require_licencias_admin)):
+def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = Depends(require_admin)):
     """Actualiza los datos de una licencia. Solo admin."""
     lic_previa = db.obtener_licencia_por_id(lic_id)
-    if not lic_previa:
-        raise HTTPException(status_code=404, detail="Licencia no encontrada")
-        
-    # Validar permisos detalladamente
-    if body.dispositivo_id != lic_previa.get("dispositivo_id") or body.dispositivos_info != lic_previa.get("dispositivos_info"):
-        check_panel_permission(current.username, current.role, "desvincular_dispositivo")
-    if body.estado != lic_previa.get("estado"):
-        check_panel_permission(current.username, current.role, "suspender_licencia")
-    if body.cliente != lic_previa.get("cliente") or body.fecha_expiracion != lic_previa.get("fecha_expiracion") or body.limite_dispositivos != lic_previa.get("limite_dispositivos"):
-        check_panel_permission(current.username, current.role, "editar_licencia")
-        
     ok = db.actualizar_licencia(
         licencia_id=lic_id,
         cliente=body.cliente,
@@ -1549,7 +1383,8 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
         limite_dispositivos=body.limite_dispositivos,
         dispositivo_id=body.dispositivo_id,
         motivo=body.motivo,
-        dispositivos_info=body.dispositivos_info
+        dispositivos_info=body.dispositivos_info,
+        integraciones=body.integraciones
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")
@@ -1557,7 +1392,7 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
     db.registrar_log(current.username, "API_UPDATE_LICENCIA", f"ID {lic_id} actualizada")
     
     # Enviar correo si pasa a suspendida
-    if body.estado == "suspendida" and lic_previa.get("estado") != "suspendida":
+    if body.estado == "suspendida" and lic_previa and lic_previa.get("estado") != "suspendida":
         import threading
         def alert_suspension():
             db.enviar_mail_alerta_licencia(
@@ -1575,60 +1410,9 @@ def api_update_licencia(lic_id: int, body: LicenciaUpdate, current: TokenData = 
     return MessageResponse(ok=True, message="Licencia actualizada")
 
 
-@app.delete("/licencias/{lic_id}/dispositivos", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_desvincular_todos_dispositivos(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
-    """Desvincula TODOS los dispositivos de una licencia. Limpia dispositivo_id y dispositivos_info."""
-    check_panel_permission(current.username, current.role, "desvincular_dispositivo")
-    lic = db.obtener_licencia_por_id(lic_id)
-    if not lic:
-        raise HTTPException(status_code=404, detail="Licencia no encontrada")
-    conn = __import__("sqlite3").connect(db.DB_PATH)
-    try:
-        conn.execute(
-            "UPDATE licencias SET dispositivo_id = '', dispositivos_info = '{}' WHERE id = ?",
-            (lic_id,)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    db.registrar_log(current.username, "DESVINCULAR_TODOS", f"Licencia ID {lic_id}: todos los dispositivos desvinculados")
-    return {"message": "Todos los dispositivos han sido desvinculados."}
-
-
-@app.delete("/licencias/{lic_id}/dispositivos/{device_id}", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_desvincular_dispositivo(lic_id: int, device_id: str, current: TokenData = Depends(require_licencias_admin)):
-    """Desvincula un dispositivo específico de una licencia."""
-    check_panel_permission(current.username, current.role, "desvincular_dispositivo")
-    lic = db.obtener_licencia_por_id(lic_id)
-    if not lic:
-        raise HTTPException(status_code=404, detail="Licencia no encontrada")
-    import json as _json
-    registered = [d.strip() for d in (lic.get("dispositivo_id") or "").split(",") if d.strip()]
-    if device_id in registered:
-        registered.remove(device_id)
-    info = {}
-    try:
-        info = _json.loads(lic.get("dispositivos_info") or "{}")
-    except Exception:
-        pass
-    info.pop(device_id, None)
-    conn = __import__("sqlite3").connect(db.DB_PATH)
-    try:
-        conn.execute(
-            "UPDATE licencias SET dispositivo_id = ?, dispositivos_info = ? WHERE id = ?",
-            (",".join(registered) or "", _json.dumps(info), lic_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    db.registrar_log(current.username, "DESVINCULAR_DISPOSITIVO", f"Licencia ID {lic_id}: dispositivo {device_id} desvinculado")
-    return {"message": f"Dispositivo desvinculado correctamente."}
-
-
 @app.delete("/licencias/{lic_id}", response_model=MessageResponse, tags=["Licencias de Software"])
-def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_licencias_admin)):
+def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_admin)):
     """Elimina una licencia. Solo admin."""
-    check_panel_permission(current.username, current.role, "eliminar_licencia")
     lic_previa = db.obtener_licencia_por_id(lic_id)
     if not lic_previa:
         raise HTTPException(status_code=404, detail="Licencia no encontrada")
@@ -1656,447 +1440,26 @@ def api_delete_licencia(lic_id: int, current: TokenData = Depends(require_licenc
     return MessageResponse(ok=True, message="Licencia eliminada")
 
 
+# ─── SOPORTE TÉCNICO ─────────────────────────────────────────────────────────
+
+@app.post("/soporte/ticket", response_model=MessageResponse, tags=["Soporte"])
+@limiter.limit("5/minute")
+def api_soporte_ticket(request: Request, body: SoporteTicketRequest):
+    """Procesa y envía un ticket de soporte técnico a supit@katrix.com.ar por email."""
+    import threading
+    def send_soporte_mail():
+        db.enviar_mail_ticket_soporte(
+            nombre=body.nombre,
+            email=body.email,
+            telefono=body.telefono or "",
+            mensaje=body.mensaje,
+            fingerprint=body.fingerprint
+        )
+    threading.Thread(target=send_soporte_mail, daemon=True).start()
+    return MessageResponse(ok=True, message="Ticket de soporte enviado con éxito")
+
+
 # ─── Health Check ─────────────────────────────────────────────────────────────
-
-PANEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
-
-@app.get("/panel", tags=["Panel"])
-def servir_panel():
-    """Sirve el panel de control de licencias (HTML estático)."""
-    if not os.path.exists(PANEL_PATH):
-        raise HTTPException(status_code=404, detail="panel.html no encontrado en el servidor")
-    return FileResponse(PANEL_PATH, media_type="text/html")
-
-
-@app.get("/panel/katrix-biometrics.js", tags=["Panel"])
-def get_katrix_biometrics_js():
-    """Sirve el frontend JavaScript de la librería biométrica."""
-    js_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katrix-biometrics.js")
-    if not os.path.exists(js_path):
-        raise HTTPException(status_code=404, detail="katrix-biometrics.js no encontrado")
-    return FileResponse(js_path, media_type="application/javascript")
-
-
-# ─── PANEL AUTH & BIOMETRICS ──────────────────────────────────────────────────
-
-@app.post("/panel/auth/login", response_model=Token, tags=["Panel Auth"])
-@limiter.limit("5/minute")
-def panel_login(request: Request, body: PanelLoginRequest):
-    user = db.obtener_panel_user(body.username)
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario de panel incorrecto")
-        
-    if not db.verify_password(user["password_hash"], body.password):
-        raise HTTPException(status_code=401, detail="Contraseña de panel incorrecta")
-        
-    role_token = "panel_superadmin" if user["role"] == "superadmin" else "panel_admin"
-    
-    import json
-    try:
-        perms = json.loads(user["permissions"])
-    except Exception:
-        perms = {}
-        
-    token = create_token({
-        "user_id": 999,
-        "username": user["username"],
-        "role": role_token,
-        "matricula": None
-    })
-    
-    db.registrar_log(user["username"], "PANEL_LOGIN", "Login exitoso en Panel de Licencias")
-    
-    # Registrar la sesión activa y eliminar de la lista de revocadas
-    REVOKED_SESSIONS.discard(user["username"])
-    client_host = request.client.host if request.client else "Desconocida"
-    user_agent = request.headers.get("user-agent", "Desconocido")
-    PANEL_SESSIONS[user["username"]] = {
-        "username": user["username"],
-        "role": role_token,
-        "ip": client_host,
-        "user_agent": user_agent,
-        "last_active": datetime.utcnow().isoformat(),
-        "status": "online"
-    }
-    
-    return Token(
-        access_token=token,
-        token_type="bearer",
-        role=role_token,
-        user_id=999,
-        username=user["username"],
-        permissions=perms
-    )
-
-@app.post("/panel/auth/change-password", response_model=MessageResponse, tags=["Panel Auth"])
-def panel_change_password(body: PanelChangePasswordRequest, current: TokenData = Depends(require_licencias_admin)):
-    user = db.obtener_panel_user(current.username)
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        
-    if not db.verify_password(user["password_hash"], body.current_password):
-        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
-        
-    db.actualizar_panel_user(user["username"], body.new_password, user["role"], user["permissions"])
-    db.registrar_log(user["username"], "PANEL_CHANGE_PASSWORD", "Cambio de contraseña del panel")
-    
-    return MessageResponse(ok=True, message="Contraseña de panel actualizada correctamente")
-
-@app.get("/panel/auth/biometrics/challenge", tags=["Panel Auth"])
-def panel_biometrics_challenge():
-    challenge = katrix_biometrics.generar_challenge()
-    challenge_token = jwt.encode(
-        {
-            "challenge": challenge, 
-            "exp": datetime.utcnow() + timedelta(minutes=2)
-        }, 
-        SECRET_KEY, 
-        algorithm=ALGORITHM
-    )
-    return {"challenge": challenge, "challenge_token": challenge_token}
-
-@app.post("/panel/auth/biometrics/register", response_model=MessageResponse, tags=["Panel Auth"])
-def panel_biometrics_register(body: BiometricRegisterRequest, current: TokenData = Depends(require_licencias_admin)):
-    try:
-        payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
-        challenge = payload.get("challenge")
-        if not challenge:
-            raise HTTPException(status_code=400, detail="Token de reto inválido")
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
-        
-    db.guardar_panel_biometric(body.credential_id, body.public_key_der, body.dispositivo_nombre, current.username)
-    db.registrar_log(current.username, "PANEL_BIOMETRICS_REG", f"Dispositivo biométrico registrado: {body.dispositivo_nombre}")
-    return MessageResponse(ok=True, message="Dispositivo biométrico registrado exitosamente")
-
-@app.post("/panel/auth/biometrics/login", response_model=Token, tags=["Panel Auth"])
-@limiter.limit("5/minute")
-def panel_biometrics_login(request: Request, body: BiometricLoginRequest):
-    try:
-        payload = jwt.decode(body.challenge_token, SECRET_KEY, algorithms=[ALGORITHM])
-        challenge = payload.get("challenge")
-        if not challenge:
-            raise HTTPException(status_code=400, detail="Token de reto inválido")
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Token de reto expirado o inválido")
-        
-    cred = db.obtener_panel_biometric(body.credential_id)
-    if not cred:
-        raise HTTPException(status_code=401, detail="Dispositivo biométrico no registrado")
-        
-    valida, motivo = katrix_biometrics.verificar_firma_biometrica(
-        public_key_der_b64=cred["public_key"],
-        signature_b64=body.signature,
-        authenticator_data_b64=body.authenticator_data,
-        client_data_json_b64=body.client_data_json,
-        challenge_original=challenge
-    )
-    
-    if not valida:
-        raise HTTPException(status_code=401, detail=f"Fallo biométrico: {motivo}")
-        
-    username = cred["username"]
-    user = db.obtener_panel_user(username)
-    if not user:
-        raise HTTPException(status_code=401, detail="El usuario asociado a este biométrico ya no existe")
-        
-    role_token = "panel_superadmin" if user["role"] == "superadmin" else "panel_admin"
-    
-    import json
-    try:
-        perms = json.loads(user["permissions"])
-    except Exception:
-        perms = {}
-        
-    token = create_token({
-        "user_id": 999,
-        "username": username,
-        "role": role_token,
-        "matricula": None
-    })
-    
-    db.registrar_log(username, "PANEL_BIOMETRICS_LOGIN", f"Login biométrico exitoso via {cred['dispositivo_nombre']}")
-    
-    # Registrar la sesión activa y eliminar de la lista de revocadas
-    REVOKED_SESSIONS.discard(username)
-    client_host = request.client.host if request.client else "Desconocida"
-    user_agent = request.headers.get("user-agent", "Desconocido")
-    PANEL_SESSIONS[username] = {
-        "username": username,
-        "role": role_token,
-        "ip": client_host,
-        "user_agent": user_agent,
-        "last_active": datetime.utcnow().isoformat(),
-        "status": "online"
-    }
-    
-    return Token(
-        access_token=token,
-        token_type="bearer",
-        role=role_token,
-        user_id=999,
-        username=username,
-        permissions=perms
-    )
-
-@app.get("/panel/auth/biometrics/credentials", tags=["Panel Auth"])
-def panel_biometrics_credentials():
-    creds = db.obtener_todos_panel_biometrics()
-    return [c["credential_id"] for c in creds]
-
-# ─── PANEL USER MANAGEMENT (SUPERADMIN ONLY) ───────────────────────────────────
-
-def require_panel_superadmin(current: TokenData = Depends(require_licencias_admin)):
-    if current.role == "admin":
-        return current  # El admin general del CRM siempre tiene rol de superadmin
-    user = db.obtener_panel_user(current.username)
-    if user and user["role"] == "superadmin":
-        return current
-    raise HTTPException(status_code=403, detail="Se requieren permisos de Superadmin del Panel")
-
-@app.get("/panel/users", response_model=List[PanelUserResponse], tags=["Panel Users"])
-def panel_list_users(current: TokenData = Depends(require_panel_superadmin)):
-    users = db.obtener_todos_panel_users()
-    res = []
-    import json
-    for u in users:
-        try:
-            perms = json.loads(u["permissions"])
-        except Exception:
-            perms = {}
-        res.append(PanelUserResponse(
-            username=u["username"],
-            role=u["role"],
-            permissions=perms
-        ))
-    return res
-
-@app.post("/panel/users", response_model=MessageResponse, tags=["Panel Users"])
-def panel_create_user(body: PanelUserCreate, current: TokenData = Depends(require_panel_superadmin)):
-    if len(body.username.strip()) < 3:
-        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
-    if len(body.password.strip()) < 4:
-        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 4 caracteres")
-        
-    existing = db.obtener_panel_user(body.username)
-    if existing:
-        raise HTTPException(status_code=400, detail="El usuario ya existe")
-        
-    import json
-    perms_str = json.dumps(body.permissions)
-    ok = db.crear_panel_user(body.username, body.password, body.role, perms_str)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Error al crear el usuario")
-        
-    db.registrar_log(current.username, "PANEL_USER_CREATE", f"Creó el usuario de panel: {body.username} (rol: {body.role})")
-    return MessageResponse(ok=True, message="Usuario creado exitosamente")
-
-@app.put("/panel/users/{username}", response_model=MessageResponse, tags=["Panel Users"])
-def panel_update_user(username: str, body: PanelUserUpdate, current: TokenData = Depends(require_panel_superadmin)):
-    existing = db.obtener_panel_user(username)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        
-    if existing["role"] == "superadmin" and body.role == "admin":
-        superadmins = [u for u in db.obtener_todos_panel_users() if u["role"] == "superadmin"]
-        if len(superadmins) <= 1:
-            raise HTTPException(status_code=400, detail="Debe haber al menos un superadmin en el sistema")
-            
-    role = body.role if body.role else existing["role"]
-    
-    import json
-    if body.permissions is not None:
-        perms_str = json.dumps(body.permissions)
-    else:
-        perms_str = existing["permissions"]
-        
-    ok = db.actualizar_panel_user(username, body.password, role, perms_str)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Error al actualizar el usuario")
-        
-    db.registrar_log(current.username, "PANEL_USER_UPDATE", f"Actualizó el usuario de panel: {username}")
-    return MessageResponse(ok=True, message="Usuario actualizado exitosamente")
-
-@app.delete("/panel/users/{username}", response_model=MessageResponse, tags=["Panel Users"])
-def panel_delete_user(username: str, current: TokenData = Depends(require_panel_superadmin)):
-    if username == current.username:
-        raise HTTPException(status_code=400, detail="No podés eliminar a tu propio usuario")
-        
-    existing = db.obtener_panel_user(username)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        
-    if existing["role"] == "superadmin":
-        superadmins = [u for u in db.obtener_todos_panel_users() if u["role"] == "superadmin"]
-        if len(superadmins) <= 1:
-            raise HTTPException(status_code=400, detail="Debe haber al menos un superadmin en el sistema")
-            
-    ok = db.eliminar_panel_user(username)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Error al eliminar el usuario")
-        
-    db.registrar_log(current.username, "PANEL_USER_DELETE", f"Eliminó el usuario de panel: {username}")
-    return MessageResponse(ok=True, message="Usuario eliminado exitosamente")
-
-# ─── PANEL ACTIVE SESSIONS & AUDIT LOGS ───────────────────────────────────────
-
-@app.get("/panel/sessions", tags=["Panel Sessions"])
-def panel_list_sessions(current: TokenData = Depends(require_licencias_admin)):
-    # Lazy cleanup of old sessions (inactive for more than 12 hours)
-    now = datetime.utcnow()
-    for u, s in list(PANEL_SESSIONS.items()):
-        try:
-            last_act = datetime.fromisoformat(s["last_active"])
-            if now - last_act > timedelta(hours=12):
-                PANEL_SESSIONS.pop(u, None)
-        except Exception:
-            PANEL_SESSIONS.pop(u, None)
-
-    if current.role not in ["panel_superadmin", "admin"]:
-        check_panel_permission(current.username, current.role, "ver_sesiones")
-
-    return list(PANEL_SESSIONS.values())
-
-@app.post("/panel/sessions/{username}/revoke", response_model=MessageResponse, tags=["Panel Sessions"])
-def panel_revoke_session(username: str, current: TokenData = Depends(require_licencias_admin)):
-    if username == current.username:
-        raise HTTPException(status_code=400, detail="No podés revocar tu propia sesión activa")
-        
-    if current.role not in ["panel_superadmin", "admin"]:
-        check_panel_permission(current.username, current.role, "desvincular_sesion")
-        
-    # Revocar sesión
-    PANEL_SESSIONS.pop(username, None)
-    REVOKED_SESSIONS.add(username)
-    
-    db.registrar_log(current.username, "PANEL_SESSION_REVOKE", f"Forzó cierre de sesión para usuario: {username}")
-    return MessageResponse(ok=True, message=f"Sesión del usuario '{username}' revocada exitosamente")
-
-@app.get("/panel/app-sessions", tags=["Panel Sessions"])
-def panel_list_app_sessions(current: TokenData = Depends(require_licencias_admin)):
-    # Lazy cleanup of old app sessions (inactive for more than 12 hours)
-    now = datetime.utcnow()
-    for u, s in list(APP_SESSIONS.items()):
-        try:
-            last_act = datetime.fromisoformat(s["last_active"])
-            if now - last_act > timedelta(hours=12):
-                APP_SESSIONS.pop(u, None)
-        except Exception:
-            APP_SESSIONS.pop(u, None)
-
-    if current.role not in ["panel_superadmin", "admin"]:
-        check_panel_permission(current.username, current.role, "ver_sesiones")
-
-    return list(APP_SESSIONS.values())
-
-@app.post("/panel/app-sessions/{username}/revoke", response_model=MessageResponse, tags=["Panel Sessions"])
-def panel_revoke_app_session(username: str, current: TokenData = Depends(require_licencias_admin)):
-    if username == current.username:
-        raise HTTPException(status_code=400, detail="No podés revocar tu propia sesión activa")
-        
-    if current.role not in ["panel_superadmin", "admin"]:
-        check_panel_permission(current.username, current.role, "desvincular_sesion")
-        
-    # Revocar sesión
-    APP_SESSIONS.pop(username, None)
-    REVOKED_SESSIONS.add(username)
-    
-    db.registrar_log(current.username, "APP_SESSION_REVOKE", f"Forzó cierre de sesión de App para usuario: {username}")
-    return MessageResponse(ok=True, message=f"Sesión de App del usuario '{username}' revocada exitosamente")
-
-@app.get("/panel/logs", tags=["Panel Logs"])
-def panel_list_logs(
-    limite: int = Query(100, ge=1, le=500, description="Cantidad máxima de logs a retornar"),
-    current: TokenData = Depends(require_licencias_admin)
-):
-    if current.role not in ["panel_superadmin", "admin"]:
-        check_panel_permission(current.username, current.role, "ver_logs")
-        
-    logs = db.obtener_logs(limite=limite)
-    return logs
-
-# ─── PWA STATIC ASSETS ──────────────────────────────────────────────────────────
-
-@app.get("/panel/manifest.json", tags=["Panel"])
-def get_manifest():
-    manifest_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifest.json")
-    if not os.path.exists(manifest_path):
-        raise HTTPException(status_code=404, detail="manifest.json no encontrado")
-    return FileResponse(manifest_path, media_type="application/json")
-
-@app.get("/panel/sw.js", tags=["Panel"])
-def get_sw():
-    sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sw.js")
-    if not os.path.exists(sw_path):
-        raise HTTPException(status_code=404, detail="sw.js no encontrado")
-    return FileResponse(sw_path, media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
-
-@app.get("/panel/icon-192.png", tags=["Panel"])
-def get_icon_192():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon-192.png")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="icon-192.png no encontrado")
-    return FileResponse(path, media_type="image/png")
-
-@app.get("/panel/icon-512.png", tags=["Panel"])
-def get_icon_512():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon-512.png")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="icon-512.png no encontrado")
-    return FileResponse(path, media_type="image/png")
-
-
-@app.get("/check-update", tags=["Sistema"])
-def check_update():
-    """
-    Obtiene la última versión disponible del cliente desde GitHub Releases.
-    """
-    import os
-    import requests
-    
-    repo = "Katrix-soft/crm-ssn"
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
-    headers = {}
-    
-    # Si hay un token de GitHub configurado en las variables de entorno, usarlo
-    github_token = os.environ.get("GITHUB_TOKEN")
-    if github_token:
-        headers["Authorization"] = f"token {github_token}"
-        
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            tag_name = data.get("tag_name", "v1.0.0")
-            version = tag_name.lstrip("v")
-            
-            download_url = None
-            for asset in data.get("assets", []):
-                if asset.get("name") == "KatrixBroker.exe":
-                    download_url = asset.get("browser_download_url")
-                    break
-            
-            if not download_url and data.get("assets"):
-                download_url = data["assets"][0].get("browser_download_url")
-                
-            return {
-                "latest_version": version,
-                "download_url": download_url,
-                "release_notes": data.get("body", "")
-            }
-        else:
-            return {
-                "latest_version": "1.0.0",
-                "download_url": None,
-                "release_notes": f"No se pudo consultar GitHub (HTTP {response.status_code})"
-            }
-    except Exception as e:
-        return {
-            "latest_version": "1.0.0",
-            "download_url": None,
-            "release_notes": f"Error de conexión: {str(e)}"
-        }
-
 
 @app.get("/health", tags=["Sistema"])
 def health():
@@ -2120,78 +1483,41 @@ def health():
             "usuarios": ["/usuarios/"],
             "logs": ["/logs/"],
             "licencias": ["/licencias/validar", "/licencias/"],
-            "panel": ["/panel"],
-            "mantenimiento": ["/mantenimiento/importar-excel", "/mantenimiento/vaciar-db"],
+            "mercantil": ["/mercantil/test-auth"],
         }
     }
 
 
-@app.post("/mantenimiento/importar-excel", tags=["Mantenimiento"])
-async def api_importar_excel(file: UploadFile = File(...), current: TokenData = Depends(require_admin)):
-    """
-    Importar un padrón de productores (en formato .xlsx, .xlsm o .csv).
-    """
-    import tempfile
-    import shutil
-    
-    filename = file.filename or ""
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in [".xlsx", ".xlsm", ".csv"]:
-        raise HTTPException(status_code=400, detail="Formato de archivo no soportado. Debe ser .xlsx, .xlsm o .csv")
+# ─── MERCANTIL ANDINA (INTEGRACION DE PRUEBAS) ────────────────────────────────
+
+try:
+    from mercantil_andina import MercantilAndinaClient, MercantilAndinaError
+    mercantil_client = MercantilAndinaClient()
+except ImportError:
+    mercantil_client = None
+
+@app.get("/mercantil/test-auth", tags=["Mercantil Andina"])
+async def test_mercantil_auth(current: TokenData = Depends(get_current_user)):
+    """Prueba la conexión y generación de token de la API de Mercantil Andina."""
+    if not mercantil_client:
+        raise HTTPException(status_code=500, detail="El cliente de Mercantil Andina no está disponible")
         
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
-            
-        try:
-            registros_insertados, incompletos = db.parsear_e_importar_archivo(tmp_path)
-            db.registrar_log(current.username, "API_IMPORT_EXCEL", f"Archivo: {filename}, Insertados: {registros_insertados}")
-            return {
-                "ok": True,
-                "message": f"Se importaron {registros_insertados} registros.",
-                "insertados": registros_insertados,
-                "incompletos": incompletos
-            }
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        token = await mercantil_client.get_token()
+        return {"status": "success", "message": "Autenticación exitosa", "token_preview": token[:10] + "..." + token[-10:] if token else None}
     except Exception as e:
-        db.registrar_log(current.username, "API_IMPORT_EXCEL_ERROR", f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/mantenimiento/vaciar-db", response_model=MessageResponse, tags=["Mantenimiento"])
-def api_vaciar_db(current: TokenData = Depends(require_admin)):
-    """
-    Vacía por completo la tabla de productores locales (productores_detalle) en la base de datos.
-    """
+@app.get("/mercantil/marcas", tags=["Mercantil Andina"])
+async def get_mercantil_marcas(current: TokenData = Depends(get_current_user)):
+    """Obtiene el catálogo de marcas de Mercantil Andina."""
+    if not mercantil_client:
+        raise HTTPException(status_code=500, detail="El cliente de Mercantil Andina no está disponible")
+        
     try:
-        eliminados = db.vaciar_base_de_datos()
-        db.registrar_log(current.username, "API_VACIAR_DB", f"Registros eliminados: {eliminados}")
-        return MessageResponse(ok=True, message=f"Base de datos local vaciada con éxito. Registros eliminados: {eliminados}")
+        marcas = await mercantil_client.obtener_marcas()
+        return {"status": "success", "data": marcas}
     except Exception as e:
-        db.registrar_log(current.username, "API_VACIAR_DB_ERROR", f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/configuracion", tags=["Configuración"])
-def api_obtener_configuraciones(current: TokenData = Depends(get_current_user)):
-    """
-    Obtener la configuración global del sistema (disponible para todos los usuarios autenticados).
-    """
-    return db.obtener_configuraciones()
-
-
-@app.post("/configuracion", response_model=MessageResponse, tags=["Configuración"])
-def api_guardar_configuracion(req: ConfigUpdateRequest, current: TokenData = Depends(require_admin)):
-    """
-    Actualizar un parámetro de configuración del sistema (sólo Administradores).
-    """
-    ok = db.guardar_configuracion(req.clave, req.valor)
-    if not ok:
-        raise HTTPException(status_code=500, detail="No se pudo guardar la configuración.")
-    db.registrar_log(current.username, "API_SET_CONFIG", f"Clave: {req.clave}, Valor: {req.valor}")
-    return MessageResponse(ok=True, message=f"Configuración '{req.clave}' actualizada con éxito.")
-
-

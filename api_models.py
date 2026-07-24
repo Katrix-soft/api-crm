@@ -12,13 +12,19 @@ class LoginRequest(BaseModel):
     username: str = Field(..., description="Nombre de usuario o email")
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., description="Email o usuario de la cuenta a recuperar")
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., description="Token JWT de recuperación")
+    password: str = Field(..., min_length=6, description="Nueva contraseña")
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
     user_id: int
     username: str
-    permissions: Optional[dict] = None
 
 class TokenData(BaseModel):
     user_id: int
@@ -419,18 +425,19 @@ class LicenciaValidarResponse(BaseModel):
     limite_dispositivos: Optional[int] = None
 
 
-class ForgotPasswordRequest(BaseModel):
-    email: str = Field(..., description="Nombre de usuario o correo electrónico")
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    password: str = Field(..., min_length=6)
-
 # ─── Configuración del Sistema ───────────────────────────────────────────────
+
 class ConfigUpdateRequest(BaseModel):
     clave: str
     valor: str
 
+
+class SoporteTicketRequest(BaseModel):
+    nombre: str
+    email: str
+    telefono: Optional[str] = ""
+    mensaje: str
+    fingerprint: Optional[str] = None
+    fecha: Optional[str] = None
 
 

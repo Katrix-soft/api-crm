@@ -14,371 +14,11 @@ import sys
 import os
 import sqlite3
 from typing import Optional, List, Dict, Any
-
-# ─── COMPATIBILIDAD DINÁMICA CON POSTGRESQL ───────────────────────────────────
-DATABASE_URL = os.environ.get("DATABASE_URL")
-psycopg2 = None
-if DATABASE_URL:
-    try:
-        import psycopg2
-    except ImportError:
-        pass
-
-class DictRow(dict):
-    def __init__(self, row, keys):
-        super().__init__(zip(keys, row))
-        self._row = row
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._row[key]
-        return super().__getitem__(key)
-
-
-def translate_group_concat(sql: str) -> str:
-    import re
-    # Búsqueda de GROUP_CONCAT sin importar mayúsculas/minúsculas
-    idx = 0
-    while True:
-        pos = sql.upper().find("GROUP_CONCAT", idx)
-        if pos == -1:
-            break
-        open_paren = sql.find("(", pos)
-        if open_paren == -1:
-            idx = pos + len("GROUP_CONCAT")
-            continue
-            
-        paren_count = 1
-        i = open_paren + 1
-        args_str = ""
-        while i < len(sql) and paren_count > 0:
-            char = sql[i]
-            if char == '(':
-                paren_count += 1
-            elif char == ')':
-                paren_count -= 1
-            if paren_count > 0:
-                args_str += char
-            i += 1
-            
-        if paren_count > 0:
-            idx = open_paren + 1
-            continue
-            
-        args = []
-        current_arg = ""
-        p_depth = 0
-        in_single_quote = False
-        in_double_quote = False
-        j = 0
-        while j < len(args_str):
-            c = args_str[j]
-            if c == "'" and not in_double_quote:
-                in_single_quote = not in_single_quote
-            elif c == '"' and not in_single_quote:
-                in_double_quote = not in_double_quote
-            elif not in_single_quote and not in_double_quote:
-                if c == '(':
-                    p_depth += 1
-                elif c == ')':
-                    p_depth -= 1
-                elif c == ',' and p_depth == 0:
-                    args.append(current_arg.strip())
-                    current_arg = ""
-                    j += 1
-                    continue
-            current_arg += c
-            j += 1
-        args.append(current_arg.strip())
-        
-        if len(args) == 1:
-            expr = args[0]
-            if expr.upper().startswith("DISTINCT "):
-                real_expr = expr[9:]
-                new_str = f"string_agg(DISTINCT ({real_expr})::text, ',')"
-            else:
-                new_str = f"string_agg(({expr})::text, ',')"
-        elif len(args) == 2:
-            expr, sep = args[0], args[1]
-            if expr.upper().startswith("DISTINCT "):
-                real_expr = expr[9:]
-                new_str = f"string_agg(DISTINCT ({real_expr})::text, {sep})"
-            else:
-                new_str = f"string_agg(({expr})::text, {sep})"
-        else:
-            idx = i
-            continue
-            
-        sql = sql[:pos] + new_str + sql[i:]
-        idx = pos + len(new_str)
-        
-    return sql
-
-
-class PostgresCursorWrapper:
-    def __init__(self, pg_cursor, connection):
-        self._cursor = pg_cursor
-        self.connection = connection
-        self.lastrowid = None
-        self._row_factory = None
-
-    def __getattr__(self, name):
-        return getattr(self._cursor, name)
-
-    def execute(self, sql, params=None):
-        if sql.strip().upper().startswith("PRAGMA"):
-            return self
-
-        # Traducir GROUP_CONCAT a string_agg para PostgreSQL
-        sql = translate_group_concat(sql)
-
-        # Traducir ? a %s
-        translated_sql = sql.replace('?', '%s')
-
-        # Traducir funciones temporales primero para evitar que la traducción de DATETIME las rompa
-        translated_sql = re.sub(
-            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
-            'CURRENT_TIMESTAMP', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
-            'CURRENT_TIMESTAMP', 
-            translated_sql
-        )
-
-        # Traducir tipos SQLite a Postgres
-        translated_sql = re.sub(
-            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
-            'SERIAL PRIMARY KEY', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r'(?i)\bDATETIME\b', 
-            'TIMESTAMP', 
-            translated_sql
-        )
-
-        # Traducir INSERT OR IGNORE / INSERT OR REPLACE
-        if "INSERT OR IGNORE INTO" in translated_sql.upper():
-            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
-            if "SOCIEDADES" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
-            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
-        elif "INSERT OR REPLACE INTO" in translated_sql.upper():
-            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
-            if "PRODUCTORES_DETALLE" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
-            elif "PANEL_BIOMETRICS" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (credential_id) DO UPDATE SET public_key=EXCLUDED.public_key, dispositivo_nombre=EXCLUDED.dispositivo_nombre, username=EXCLUDED.username"
-            elif "PANEL_SETTINGS" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
-
-        is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
-        has_returning = "RETURNING" in translated_sql.upper()
-
-        sp_cursor = self.connection._conn.cursor()
-        sp_active = False
-        try:
-            sp_cursor.execute("SAVEPOINT pg_exec_sp")
-            sp_active = True
-        except Exception:
-            pass
-
-        try:
-            # Solo agregamos RETURNING id si sabemos que la tabla tiene una columna id
-            # Tablas que NO tienen id: panel_settings, panel_users, panel_biometrics, productor_sociedad, permisos_visibilidad
-            skip_returning = any(t in translated_sql.upper() for t in ["PANEL_SETTINGS", "PANEL_USERS", "PANEL_BIOMETRICS", "PRODUCTOR_SOCIEDAD", "PERMISOS_VISIBILIDAD"])
-            
-            if is_insert and not has_returning and not skip_returning:
-                try:
-                    modified_sql = translated_sql + " RETURNING id"
-                    self._cursor.execute(modified_sql, params or ())
-                    res = self._cursor.fetchone()
-                    if res:
-                        self.lastrowid = res[0]
-                except Exception:
-                    if sp_active:
-                        try:
-                            sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
-                        except Exception:
-                            pass
-                    self._cursor.execute(translated_sql, params or ())
-                    self.lastrowid = None
-            else:
-                self._cursor.execute(translated_sql, params or ())
-
-            if sp_active:
-                try:
-                    sp_cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
-                except Exception:
-                    pass
-        except Exception as e:
-            if sp_active:
-                try:
-                    sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
-                except Exception:
-                    pass
-            err_str = str(e)
-            if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
-                raise sqlite3.OperationalError(err_str)
-            raise sqlite3.DatabaseError(err_str)
-        finally:
-            try:
-                sp_cursor.close()
-            except Exception:
-                pass
-
-        return self
-
-    def executemany(self, sql, seq_of_parameters):
-        if sql.strip().upper().startswith("PRAGMA"):
-            return self
-
-        # Traducir GROUP_CONCAT a string_agg para PostgreSQL
-        sql = translate_group_concat(sql)
-
-        # Traducir ? a %s
-        translated_sql = sql.replace('?', '%s')
-
-        # Traducir funciones temporales primero para evitar que la traducción de DATETIME las rompa
-        translated_sql = re.sub(
-            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
-            'CURRENT_TIMESTAMP', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
-            'CURRENT_TIMESTAMP', 
-            translated_sql
-        )
-
-        # Traducir tipos SQLite a Postgres
-        translated_sql = re.sub(
-            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
-            'SERIAL PRIMARY KEY', 
-            translated_sql
-        )
-        translated_sql = re.sub(
-            r'(?i)\bDATETIME\b', 
-            'TIMESTAMP', 
-            translated_sql
-        )
-
-        # Traducir INSERT OR IGNORE / INSERT OR REPLACE
-        if "INSERT OR IGNORE INTO" in translated_sql.upper():
-            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
-            if "SOCIEDADES" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
-            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
-        elif "INSERT OR REPLACE INTO" in translated_sql.upper():
-            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
-            if "PRODUCTORES_DETALLE" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
-            elif "PANEL_BIOMETRICS" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (credential_id) DO UPDATE SET public_key=EXCLUDED.public_key, dispositivo_nombre=EXCLUDED.dispositivo_nombre, username=EXCLUDED.username"
-            elif "PANEL_SETTINGS" in translated_sql.upper():
-                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
-
-        sp_cursor = self.connection._conn.cursor()
-        sp_active = False
-        try:
-            sp_cursor.execute("SAVEPOINT pg_exec_sp")
-            sp_active = True
-        except Exception:
-            pass
-
-        try:
-            self._cursor.executemany(translated_sql, seq_of_parameters)
-            if sp_active:
-                try:
-                    sp_cursor.execute("RELEASE SAVEPOINT pg_exec_sp")
-                except Exception:
-                    pass
-        except Exception as e:
-            if sp_active:
-                try:
-                    sp_cursor.execute("ROLLBACK TO SAVEPOINT pg_exec_sp")
-                except Exception:
-                    pass
-            err_str = str(e)
-            if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
-                raise sqlite3.OperationalError(err_str)
-            raise sqlite3.DatabaseError(err_str)
-        finally:
-            try:
-                sp_cursor.close()
-            except Exception:
-                pass
-
-        return self
-
-    def fetchone(self):
-        row = self._cursor.fetchone()
-        if row is None:
-            return None
-        keys = [desc[0] for desc in self._cursor.description]
-        if self._row_factory or getattr(self.connection, 'row_factory', None):
-            return DictRow(row, keys)
-        return row
-
-    def fetchall(self):
-        rows = self._cursor.fetchall()
-        if not rows:
-            return []
-        keys = [desc[0] for desc in self._cursor.description]
-        if self._row_factory or getattr(self.connection, 'row_factory', None):
-            return [DictRow(row, keys) for row in rows]
-        return rows
-
-    def close(self):
-        self._cursor.close()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        row = self.fetchone()
-        if row is None:
-            raise StopIteration
-        return row
-
-class PostgresConnectionWrapper:
-    def __init__(self, pg_conn):
-        self._conn = pg_conn
-        self.row_factory = None
-
-    def cursor(self):
-        cursor = self._conn.cursor()
-        return PostgresCursorWrapper(cursor, self)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        self._conn.close()
-
-    def execute(self, sql, params=None):
-        cur = self.cursor()
-        cur.execute(sql, params)
-        return cur
-
+# Optimize SQLite for minimal resource usage, WAL mode, memory temp store, cache size limiting.
 _wal_initialized = False
 _orig_sqlite_connect = sqlite3.connect
-
 def _custom_sqlite_connect(*args, **kwargs):
     global _wal_initialized
-    if DATABASE_URL and psycopg2:
-        try:
-            pg_conn = psycopg2.connect(DATABASE_URL)
-            return PostgresConnectionWrapper(pg_conn)
-        except Exception as e:
-            print(f"Error conectando a Postgres (DATABASE_URL), cayendo a SQLite: {e}")
-
     if "timeout" not in kwargs:
         kwargs["timeout"] = 30.0
     conn = _orig_sqlite_connect(*args, **kwargs)
@@ -386,13 +26,15 @@ def _custom_sqlite_connect(*args, **kwargs):
         if not _wal_initialized:
             conn.execute("PRAGMA journal_mode = WAL;")
             _wal_initialized = True
+        # NORMAL synchronous mode is faster and safe in WAL mode
         conn.execute("PRAGMA synchronous = NORMAL;")
+        # Store temp tables in memory to avoid disk access
         conn.execute("PRAGMA temp_store = MEMORY;")
+        # Limit memory cache to ~2MB to keep RAM footprint low when compiled to .exe
         conn.execute("PRAGMA cache_size = -2000;")
     except Exception:
         pass
     return conn
-
 sqlite3.connect = _custom_sqlite_connect
 import csv
 import secrets
@@ -448,26 +90,26 @@ def obtener_proxies_activos() -> dict:
         proxies["https"] = https_proxy
     return proxies
 
-# Calcular rutas absolutas para evitar problemas con el CWD al lanzar desde Tauri
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_local_data_dir = os.path.join(_script_dir, "data")
-_parent_data_dir = os.path.join(_script_dir, "..", "data")
-
-_local_db = os.path.join(_local_data_dir, "productores_scraped.db")
-_parent_db = os.path.normpath(os.path.join(_parent_data_dir, "productores_scraped.db"))
-
-# Usar la DB que tenga datos reales (priorizar la local, fallback al directorio padre)
-# Umbral de 1MB para distinguir DB con datos reales de DBs vacías con solo tablas (~266KB)
-if os.path.exists(_local_db) and os.path.getsize(_local_db) > 1_000_000:
-    DB_DIR = _local_data_dir
-    DB_PATH = _local_db
-elif os.path.exists(_parent_db) and os.path.getsize(_parent_db) > 1_000_000:
-    DB_DIR = os.path.normpath(_parent_data_dir)
-    DB_PATH = _parent_db
+import platform
+if platform.system() == "Windows":
+    DB_DIR = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "KatrixBroker", "data")
 else:
+    DB_DIR = os.path.join(os.path.expanduser("~"), ".katrixbroker", "data")
+
+# Fallback: si la DB principal no existe o está vacía, usar la DB local en ./data/
+_primary_db = os.path.join(DB_DIR, "productores_scraped.db")
+_local_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+_local_db = os.path.join(_local_data_dir, "productores_scraped.db")
+
+if os.path.exists(_primary_db) and os.path.getsize(_primary_db) > 0:
+    DB_PATH = _primary_db
+elif os.path.exists(_local_db) and os.path.getsize(_local_db) > 0:
+    # Usar la DB local y sincronizar el DB_DIR para que inicializar_db() funcione correctamente
     DB_DIR = _local_data_dir
     DB_PATH = _local_db
-print(f"DATABASE RESOLVED PATH: {DB_PATH} (exists={os.path.exists(DB_PATH)}, size={os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0})", flush=True)
+else:
+    # Si no existe ninguna, usar la ruta primaria (se creará al inicializar)
+    DB_PATH = _primary_db
 CSV_URL = "https://datosabiertos.ssn.gob.ar/dataset/be4927ba-6b6d-4cee-b33e-5319b33b15b8/resource/07de24f8-4191-497e-a0da-da83cf5eb5d9/download/productores-asesores.csv"
 CSV_PATH_LOCAL = os.path.join(DB_DIR, "productores-asesores.csv")
 CSV_PATH_ROOT = "productores-asesores.csv"
@@ -595,6 +237,13 @@ def inicializar_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_estado ON productores_detalle(estado_contacto)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_provincia ON productores_detalle(provincia)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_localidad ON productores_detalle(localidad)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_usuario ON productores_detalle(usuario_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_polizas_estado ON polizas(estado)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_polizas_matricula ON polizas(pas_matricula)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_visitas_mes ON visitas_pas(mes)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_actividades_mes ON actividades_comerciales(mes)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_candidatos_mes ON candidatos_captacion(mes)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_acciones_mes ON acciones_mensuales(mes)")
 
     # Crear tabla de relación muchos a muchos productor_sociedad (Eloquent style)
     cursor.execute("""
@@ -676,9 +325,33 @@ def inicializar_db():
     except sqlite3.OperationalError:
         pass
 
+    # Asegurar columna calendar_url en usuarios
+    try:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN calendar_url TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Asegurar columna permisos en usuarios
+    try:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN permisos TEXT DEFAULT 'comercial,buscador,cartera'")
+    except sqlite3.OperationalError:
+        pass
+
+    # Asegurar que permisos no sean NULL para todos los usuarios
+    try:
+        cursor.execute("UPDATE usuarios SET permisos = 'comercial,buscador,cartera' WHERE permisos IS NULL")
+    except Exception:
+        pass
+
     # Asegurar columna usuario_id en productores_detalle
     try:
         cursor.execute("ALTER TABLE productores_detalle ADD COLUMN usuario_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+    # Asegurar columna en_organizacion en productores_detalle
+    try:
+        cursor.execute("ALTER TABLE productores_detalle ADD COLUMN en_organizacion INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
 
@@ -719,7 +392,7 @@ def inicializar_db():
         )
     """)
     # Migrar columnas faltantes por si la tabla ya existe
-    for col in [("campaña", "TEXT DEFAULT ''"), ("productividad", "TEXT DEFAULT ''"), ("estado_org", "TEXT DEFAULT ''")]:
+    for col in [("campaña", "TEXT DEFAULT ''"), ("productividad", "TEXT DEFAULT ''"), ("estado_org", "TEXT DEFAULT ''"), ("lugar", "TEXT DEFAULT ''")]:
         try:
             cursor.execute(f"ALTER TABLE visitas_pas ADD COLUMN {col[0]} {col[1]}")
         except Exception:
@@ -824,171 +497,79 @@ def inicializar_db():
             clave TEXT UNIQUE NOT NULL,
             cliente TEXT NOT NULL,
             dispositivo_id TEXT,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
             fecha_expiracion TEXT NOT NULL,
             estado TEXT DEFAULT 'activa',
             limite_dispositivos INTEGER DEFAULT 1
         )
     """)
-    
-    # Crear tablas para el Panel de Licencias Independiente y Biometría
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS panel_settings (
-            clave TEXT PRIMARY KEY,
-            valor TEXT
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS panel_biometrics (
-            credential_id TEXT PRIMARY KEY,
-            public_key TEXT NOT NULL,
-            dispositivo_nombre TEXT,
-            username TEXT,
-            creado_en TEXT DEFAULT (datetime('now', 'localtime'))
-        )
-    """)
-    
-    # Asegurar columna username en panel_biometrics si ya existía la tabla
-    try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
-    except sqlite3.OperationalError:
-        pass
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS panel_users (
-            username TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
-            permissions TEXT NOT NULL
-        )
-    """)
-    
-    # Inicializar contraseña por defecto del panel (admin123) si no existe
-    cursor.execute("SELECT COUNT(*) FROM panel_settings WHERE clave = 'password_hash'")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("password_hash", hash_password("admin123")))
-
-    # Inicializar usuario por defecto del panel (panel_admin) si no existe
-    cursor.execute("SELECT COUNT(*) FROM panel_settings WHERE clave = 'username'")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO panel_settings (clave, valor) VALUES (?, ?)", ("username", "panel_admin"))
-
-    # Sembrar usuarios kadmin (superadmin) y nicodev (admin) si no existen
-    cursor.execute("SELECT COUNT(*) FROM panel_users WHERE username = 'kadmin'")
-    if cursor.fetchone()[0] == 0:
-        kadmin_pass = os.environ.get("KATRIX_KADMIN_PASSWORD", "Katrix2026$")
-        hashed_kadmin = hash_password(kadmin_pass)
-        kadmin_perms = '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":true,"eliminar_licencia":true,"ver_dispositivos":true,"desvincular_dispositivo":true,"ver_sesiones":true,"desvincular_sesion":true,"ver_logs":true}'
-        cursor.execute("""
-            INSERT INTO panel_users (username, password_hash, role, permissions)
-            VALUES (?, ?, ?, ?)
-        """, ("kadmin", hashed_kadmin, "superadmin", kadmin_perms))
-
-    cursor.execute("SELECT COUNT(*) FROM panel_users WHERE username = 'nicodev'")
-    if cursor.fetchone()[0] == 0:
-        nicodev_pass = os.environ.get("KATRIX_NICODEV_PASSWORD", "nicodev")
-        hashed_nicodev = hash_password(nicodev_pass)
-        nicodev_perms = '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":false,"eliminar_licencia":false,"ver_dispositivos":true,"desvincular_dispositivo":false,"ver_sesiones":true,"desvincular_sesion":false,"ver_logs":true}'
-        cursor.execute("""
-            INSERT INTO panel_users (username, password_hash, role, permissions)
-            VALUES (?, ?, ?, ?)
-        """, ("nicodev", hashed_nicodev, "admin", nicodev_perms))
-
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE licencias ADD COLUMN integraciones TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Asegurar que la clave de producción usada localmente también sea válida para desarrollo sin fricción
-    for license_key in ["KTX-CRM-DQUK-LEQD-73A2", "KTX-CRM-DQUK-LEGD-73A2"]:
+    for license_key, client, exp, status, max_dev in [
+        ("KTX-CRM-DQUK-LEQD-73A2", "Cliente Desarrollo", "2030-12-31", "activa", 10),
+        ("KTX-CRM-DQUK-LEGD-73A2", "Cliente Desarrollo", "2030-12-31", "activa", 10),
+        ("KTX-TEST-VALID-2026", "Cliente Prueba", "2030-12-31", "activa", 2)
+    ]:
         cursor.execute("SELECT COUNT(*) FROM licencias WHERE clave = ?", (license_key,))
         if cursor.fetchone()[0] == 0:
             cursor.execute("""
                 INSERT INTO licencias (clave, cliente, fecha_expiracion, estado, limite_dispositivos)
                 VALUES (?, ?, ?, ?, ?)
-            """, (license_key, "Cliente Desarrollo", "2030-12-31", "activa", 10))
+            """, (license_key, client, exp, status, max_dev))
     # ─────────────────────────────────────────────────────────────────────
 
     # Insertar usuarios por defecto si no existen
     for u, e, p, r in [
         ("broker", "broker@katrix.com", "password123", "admin"),
+        ("admin1", "admin1@katrix.com", "password123", "admin"),
     ]:
-        cursor.execute("SELECT COUNT(*) FROM usuarios WHERE email = ?", (e,))
-        if cursor.fetchone()[0] == 0:
-            hashed_p = hash_password(p)
-            cursor.execute("INSERT INTO usuarios (usuario, email, password, requiere_cambio, rol) VALUES (?, ?, ?, 0, ?)", (u, e, hashed_p, r))
+        cursor.execute("SELECT id FROM usuarios WHERE usuario = ? OR email = ?", (u, e))
+        row = cursor.fetchone()
+        hashed_p = hash_password(p)
+        if not row:
+            cursor.execute("INSERT INTO usuarios (usuario, email, password, requiere_cambio, rol, intentos_fallidos, bloqueado_hasta) VALUES (?, ?, ?, 0, ?, 0, 0)", (u, e, hashed_p, r))
         else:
-            # Si ya existía por email, asegurar que tenga el usuario asignado
-            cursor.execute("UPDATE usuarios SET usuario = ?, rol = ? WHERE email = ? AND (usuario IS NULL OR usuario = '')", (u, r, e))
-            # Si la contraseña no está hasheada (no contiene ":"), hashearla para actualizar seguridad
-            cursor.execute("SELECT password FROM usuarios WHERE email = ?", (e,))
-            curr_p = cursor.fetchone()[0]
-            if curr_p and ":" not in curr_p:
-                hashed_p = hash_password(curr_p)
-                cursor.execute("UPDATE usuarios SET password = ? WHERE email = ?", (hashed_p, e))
-
-    # Carga de Semilla de Datos ERP
-    cursor.execute("SELECT COUNT(*) FROM clientes")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("SELECT matricula FROM productores_detalle LIMIT 3")
-        mats = [r[0] for r in cursor.fetchall()]
-        while len(mats) < 3:
-            mats.append(f"M-{len(mats)+70000}")
-            
-        dummy_clients = [
-            ("Juan Pérez", "20-34567890-9", "juan.perez@gmail.com", "11-4567-8901", "Av. Cabildo 1540, CABA", "Cliente desde 2024. Prefiere contacto por WhatsApp."),
-            ("María Rodríguez", "27-40123456-8", "maria.rod@hotmail.com", "261-987-6543", "San Martín 450, Mendoza", "Interesada en seguros de Vida."),
-            ("Carlos González", "20-22334455-6", "carlos.gonzalez@empresa.com", "351-555-0199", "Colón 120, Córdoba", "Director de Pyme local."),
-            ("Sofía Martínez", "27-38445566-1", "sofia.m@gmail.com", "11-2345-6789", "Corrientes 890, CABA", "Cliente con múltiples vehículos."),
-            ("Estudio Contable ASOC", "30-71556677-9", "contacto@estudioasoc.com", "341-480-1234", "Pellegrini 1400, Rosario", "Cuenta corporativa. Pólizas de Comercio.")
-        ]
-        for c in dummy_clients:
-            cursor.execute("INSERT INTO clientes (nombre, dni_cuil, email, telefono, direccion, notas) VALUES (?, ?, ?, ?, ?, ?)", c)
-            
-        dummy_policies = [
-            (1, mats[0], "San Cristóbal", "Automotor", "POL-98765", "2026-01-15", "2027-01-15", 120000.0, 150000.0, 15.0, 22500.0, "Al día", "Vigente", "Toyota Corolla 2022. Cobertura Todo Riesgo."),
-            (1, mats[0], "Allianz", "Hogar", "POL-11223", "2026-03-01", "2027-03-01", 35000.0, 45000.0, 20.0, 9000.0, "Al día", "Vigente", "Casa de familia en Olivos. Robo e Incendio."),
-            (2, mats[1], "Sancor", "Vida", "POL-44556", "2026-02-10", "2027-02-10", 60000.0, 70000.0, 25.0, 17500.0, "Al día", "Vigente", "Seguro de vida individual con capital capitalizable."),
-            (3, mats[2], "San Cristóbal", "Integral de Comercio", "POL-77889", "2026-05-01", "2027-05-01", 200000.0, 260000.0, 18.0, 46800.0, "Financiada", "Vigente", "Oficinas comerciales. Adicional robo de valores."),
-            (4, mats[0], "Federación Patronal", "Automotor", "POL-33445", "2025-06-01", "2026-06-01", 90000.0, 110000.0, 15.0, 16500.0, "Impaga", "Vigente", "Ford Focus 2018. Responsabilidad Civil."),
-            (5, mats[1], "Allianz", "ART", "POL-55667", "2026-04-15", "2027-04-15", 300000.0, 380000.0, 10.0, 38000.0, "Al día", "Vigente", "Contrato ART para empleados administrativos.")
-        ]
-        for p in dummy_policies:
+            # Si el usuario ya existe, asegurar que usuario, rol, requiere_cambio e intentos_fallidos estén reseteados
             cursor.execute("""
-                INSERT INTO polizas (cliente_id, pas_matricula, compania, ramo, nro_poliza, vigencia_desde, vigencia_hasta, prima, premio, comision_porcentaje, comision_monto, estado_pago, estado, notas)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, p)
-            
-        dummy_claims = [
-            (1, "2026-05-10", "Choque menor en la vía pública (esquina). Daño en paragolpes trasero. Repuestos autorizados.", "En proceso", "Taller oficial Toyota en proceso de reparación."),
-            (6, "2026-06-02", "Accidente in-itinere de empleado. Esguince de tobillo. Asistencia médica brindada.", "Liquidado", "Caso cerrado. Alta médica otorgada.")
-        ]
-        for cl in dummy_claims:
-            # Seguro que el policy ID exista. El sexto es de Allianz ART (ID 6)
-            cursor.execute("INSERT INTO siniestros (poliza_id, fecha_siniestro, descripcion, estado, notas) VALUES (?, ?, ?, ?, ?)", cl)
-        
-    # Asegurar tabla configuracion_sistema
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS configuracion_sistema (
-                clave TEXT PRIMARY KEY,
-                valor TEXT
-            )
-        """)
-        default_configs = [
-            ("permitir_busqueda_ssn", "true"),
-            ("permitir_importacion_excel", "true"),
-            ("permitir_vaciar_db", "true"),
-            ("permitir_plan_comercial", "true"),
-            ("permitir_metricas_kpi", "true"),
-            ("permitir_cartera_polizas", "true")
-        ]
-        for key, val in default_configs:
-            cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (clave, valor) VALUES (?, ?)", (key, val))
-    except Exception as e:
-        print(f"Error al crear tabla configuracion_sistema: {e}")
+                UPDATE usuarios 
+                SET usuario = ?, email = ?, rol = ?, requiere_cambio = 0, intentos_fallidos = 0, bloqueado_hasta = 0 
+                WHERE id = ?
+            """, (u, e, r, row[0]))
+            # Si la contraseña no coincide o no es válida, asegurar password123
+            cursor.execute("SELECT password FROM usuarios WHERE id = ?", (row[0],))
+            pass_row = cursor.fetchone()
+            if not pass_row or not verify_password(pass_row[0], p):
+                cursor.execute("UPDATE usuarios SET password = ? WHERE id = ?", (hashed_p, row[0]))
 
+
+    # Asegurar tabla configuracion_sistema
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion_sistema (
+            clave TEXT PRIMARY KEY,
+            valor TEXT
+        )
+    """)
+    # Valores por defecto para configuracion_sistema
+    default_configs = [
+        ("permitir_busqueda_ssn", "true"),
+        ("permitir_importacion_excel", "true"),
+        ("permitir_vaciar_db", "true"),
+        ("permitir_plan_comercial", "true"),
+        ("permitir_metricas_kpi", "true"),
+        ("permitir_cartera_polizas", "true")
+    ]
+    for key, val in default_configs:
+        cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (clave, valor) VALUES (?, ?)", (key, val))
+
+    # Semilla de datos eliminada. La base de datos arranca limpia para produccion.
     conn.commit()
     conn.close()
 
@@ -1027,24 +608,36 @@ def obtener_visitas(mes: str = None) -> list:
     return [dict(r) for r in rows]
 
 def guardar_visita(mes: str, matricula: str, nombre: str, estado: str = "pendiente",
-                   productividad: str = "", estado_org: str = "", campaña: str = "") -> int:
+                   productividad: str = "", estado_org: str = "", campaña: str = "",
+                   lugar: str = "", fecha: str = None) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO visitas_pas (mes, matricula, nombre, estado, productividad, estado_org, campaña)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (mes, matricula, nombre, estado, productividad, estado_org, campaña))
+    if fecha:
+        cursor.execute("""
+            INSERT INTO visitas_pas (mes, matricula, nombre, estado, productividad, estado_org, campaña, lugar, fecha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (mes, matricula, nombre, estado, productividad, estado_org, campaña, lugar, fecha))
+    else:
+        cursor.execute("""
+            INSERT INTO visitas_pas (mes, matricula, nombre, estado, productividad, estado_org, campaña, lugar)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (mes, matricula, nombre, estado, productividad, estado_org, campaña, lugar))
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return row_id
 
-def actualizar_visita(visita_id: int, estado: str, productividad: str = "", estado_org: str = "", campaña: str = "") -> bool:
+def actualizar_visita(visita_id: int, estado: str, productividad: str = "", estado_org: str = "", campaña: str = "", lugar: str = "", fecha: str = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE visitas_pas SET estado=?, productividad=?, estado_org=?, campaña=? WHERE id=?
-    """, (estado, productividad, estado_org, campaña, visita_id))
+    if fecha:
+        cursor.execute("""
+            UPDATE visitas_pas SET estado=?, productividad=?, estado_org=?, campaña=?, lugar=?, fecha=? WHERE id=?
+        """, (estado, productividad, estado_org, campaña, lugar, fecha, visita_id))
+    else:
+        cursor.execute("""
+            UPDATE visitas_pas SET estado=?, productividad=?, estado_org=?, campaña=?, lugar=? WHERE id=?
+        """, (estado, productividad, estado_org, campaña, lugar, visita_id))
     ok = cursor.rowcount > 0
     conn.commit()
     conn.close()
@@ -1275,49 +868,54 @@ def importar_actividades_desde_excel(file_path: str) -> dict:
                 }
 
                 imported_count = 0
-                for r in rows[6:]:
-                    r_vals = {}
-                    for c in r.findall('ns:c', ns):
-                        cell_type = c.attrib.get('t')
-                        val_tag = c.find('ns:v', ns)
-                        val = val_tag.text if val_tag is not None else ''
-                        if cell_type == 's' and val.isdigit():
-                            val = shared_strings[int(val)]
-                        col_name = ''.join([char for char in c.attrib.get('r') if char.isalpha()])
-                        r_vals[col_name] = val
-                        
-                    name = r_vals.get('B', '').strip()
-                    if name and name != 'Nombre Productor' and not name.startswith('Total'):
-                        comp = r_vals.get('C', '').strip()
-                        for col, val in r_vals.items():
-                            if col in col_to_month and val in ['1', '2']:
-                                m_name = col_to_month[col]
-                                m_num = month_mapping.get(m_name, '01')
-                                day_str = col_to_day.get(col, '01')
-                                if len(day_str) == 1:
-                                    day_str = '0' + day_str
-                                date_str = f"2024-{m_num}-{day_str}"
-                                mes_str = f"2024-{m_num}"
-                                act_type = 'Llamado' if val == '1' else 'Reunión'
-                                
-                                # Find if there is a matricula in the DB for this name
-                                conn_find = sqlite3.connect(DB_PATH)
-                                cursor_find = conn_find.cursor()
-                                cursor_find.execute("SELECT matricula FROM productores_detalle WHERE nombre LIKE ? LIMIT 1", (f"%{name}%",))
-                                mat_row = cursor_find.fetchone()
-                                mat = mat_row[0] if mat_row else ""
-                                conn_find.close()
-                                
-                                # Save it
-                                guardar_actividad_comercial(
-                                    mes=mes_str,
-                                    fecha_actividad=date_str,
-                                    matricula=mat,
-                                    nombre=name,
-                                    tipo=act_type,
-                                    compania=comp
-                                )
-                                imported_count += 1
+                conn_db = sqlite3.connect(DB_PATH)
+                cursor_db = conn_db.cursor()
+                try:
+                    for r in rows[6:]:
+                        r_vals = {}
+                        for c in r.findall('ns:c', ns):
+                            cell_type = c.attrib.get('t')
+                            val_tag = c.find('ns:v', ns)
+                            val = val_tag.text if val_tag is not None else ''
+                            if cell_type == 's' and val.isdigit():
+                                val = shared_strings[int(val)]
+                            col_name = ''.join([char for char in c.attrib.get('r') if char.isalpha()])
+                            r_vals[col_name] = val
+                            
+                        name = r_vals.get('B', '').strip()
+                        if name and name != 'Nombre Productor' and not name.startswith('Total'):
+                            comp = r_vals.get('C', '').strip()
+                            for col, val in r_vals.items():
+                                if col in col_to_month and val in ['1', '2']:
+                                    m_name = col_to_month[col]
+                                    m_num = month_mapping.get(m_name, '01')
+                                    day_str = col_to_day.get(col, '01')
+                                    if len(day_str) == 1:
+                                        day_str = '0' + day_str
+                                    date_str = f"2024-{m_num}-{day_str}"
+                                    mes_str = f"2024-{m_num}"
+                                    act_type = 'Llamado' if val == '1' else 'Reunión'
+                                    
+                                    # Find if there is a matricula in the DB for this name
+                                    cursor_db.execute("SELECT matricula FROM productores_detalle WHERE nombre LIKE ? LIMIT 1", (f"%{name}%",))
+                                    mat_row = cursor_db.fetchone()
+                                    mat = mat_row[0] if mat_row else ""
+                                    
+                                    # Check if duplicate exists
+                                    cursor_db.execute("""
+                                        SELECT id FROM actividades_comerciales 
+                                        WHERE fecha_actividad = ? AND nombre = ? AND tipo = ?
+                                    """, (date_str, name, act_type))
+                                    exists = cursor_db.fetchone()
+                                    if not exists:
+                                        cursor_db.execute("""
+                                            INSERT INTO actividades_comerciales (mes, fecha_actividad, matricula, nombre, tipo, compania, observaciones)
+                                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                        """, (mes_str, date_str, mat, name, act_type, comp, ''))
+                                        imported_count += 1
+                    conn_db.commit()
+                finally:
+                    conn_db.close()
                                 
                 return {"success": True, "count": imported_count, "message": f"Se importaron {imported_count} actividades con éxito."}
     except Exception as e:
@@ -1457,27 +1055,23 @@ def obtener_todos_db(user_id: int = None, role: str = None, regional_only: bool 
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
-                       GROUP_CONCAT(s.denominacion || ' (Mat: ' || s.matricula || ')', '; ') as sociedades
+                       '' as sociedades
                 FROM productores_detalle p
-                LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
-                LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
                 WHERE (p.usuario_id = ? 
                    OR p.usuario_id IN (SELECT usuario_propietario_id FROM permisos_visibilidad WHERE usuario_lector_id = ?)
                    OR p.usuario_id IS NULL)
                   {regional_clause}
-                GROUP BY p.matricula
+                ORDER BY CAST(p.matricula AS INTEGER) DESC
             """, (user_id, user_id))
         else:
             cursor.execute(f"""
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
-                       GROUP_CONCAT(s.denominacion || ' (Mat: ' || s.matricula || ')', '; ') as sociedades
+                       '' as sociedades
                 FROM productores_detalle p
-                LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
-                LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
                 WHERE 1=1 {regional_clause}
-                GROUP BY p.matricula
+                ORDER BY CAST(p.matricula AS INTEGER) DESC
             """)
         rows = cursor.fetchall()
         conn.close()
@@ -1497,16 +1091,10 @@ def obtener_cartera_db(user_id: int = None, role: str = None, regional_only: boo
         cursor = conn.cursor()
         
         regional_clause = "AND UPPER(p.provincia) IN ('MENDOZA', 'SAN JUAN', 'SAN LUIS')" if regional_only else ""
-        # Filtro de cartera: estado de contacto activo, con pólizas, en visitas, en candidatos, o asignado a un usuario
-        # Se requiere nombre válido para no tener vacíos al principio y restringir a Mendoza y San Juan.
+        # Filtro de cartera: ahora los productores de la cartera son exclusivamente los que tienen la marca 'en_organizacion = 1'
+        # Se requiere nombre válido para no tener vacíos al principio y restringir por región si regional_only.
         cartera_filter = f"""
-            (
-                (p.estado_contacto NOT IN ('Sin contactar', 'Sin contacto', '') AND p.estado_contacto IS NOT NULL)
-                OR p.usuario_id IS NOT NULL
-                OR p.matricula IN (SELECT DISTINCT pas_matricula FROM polizas)
-                OR p.matricula IN (SELECT DISTINCT matricula FROM visitas_pas)
-                OR p.matricula IN (SELECT DISTINCT matricula FROM candidatos_captacion)
-            )
+            p.en_organizacion = 1
             AND p.nombre IS NOT NULL AND p.nombre != '' AND p.nombre != '—'
             {regional_clause}
         """
@@ -1516,29 +1104,29 @@ def obtener_cartera_db(user_id: int = None, role: str = None, regional_only: boo
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
-                       GROUP_CONCAT(s.denominacion || ' (Mat: ' || s.matricula || ')', '; ') as sociedades
+                       '' as sociedades,
+                       (SELECT COUNT(*) FROM polizas pol WHERE pol.pas_matricula = p.matricula AND pol.estado = 'Vigente') as cant_polizas,
+                       (SELECT COUNT(DISTINCT cliente_id) FROM polizas pol WHERE pol.pas_matricula = p.matricula AND pol.estado = 'Vigente') as cant_clientes
                 FROM productores_detalle p
-                LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
-                LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
                 WHERE (
                     p.usuario_id = ? 
                     OR p.usuario_id IN (SELECT usuario_propietario_id FROM permisos_visibilidad WHERE usuario_lector_id = ?)
                     OR p.usuario_id IS NULL
                 )
                 AND ({cartera_filter})
-                GROUP BY p.matricula
+                ORDER BY CAST(p.matricula AS INTEGER) DESC
             """, (user_id, user_id))
         else:
             cursor.execute(f"""
                 SELECT p.matricula, p.nombre, p.documento, p.cuit, p.ramo, p.provincia, p.telefono, p.email, 
                        p.resolucion, p.fecha_resolucion, p.scraped_at, p.domicilio, p.localidad, p.cod_postal, 
                        p.estado_contacto, p.observaciones, p.companias, p.usuario_id,
-                       GROUP_CONCAT(s.denominacion || ' (Mat: ' || s.matricula || ')', '; ') as sociedades
+                       '' as sociedades,
+                       (SELECT COUNT(*) FROM polizas pol WHERE pol.pas_matricula = p.matricula AND pol.estado = 'Vigente') as cant_polizas,
+                       (SELECT COUNT(DISTINCT cliente_id) FROM polizas pol WHERE pol.pas_matricula = p.matricula AND pol.estado = 'Vigente') as cant_clientes
                 FROM productores_detalle p
-                LEFT JOIN productor_sociedad ps ON p.matricula = ps.productor_matricula
-                LEFT JOIN sociedades s ON ps.sociedad_matricula = s.matricula
                 WHERE {cartera_filter}
-                GROUP BY p.matricula
+                ORDER BY CAST(p.matricula AS INTEGER) DESC
             """)
         rows = cursor.fetchall()
         conn.close()
@@ -1667,7 +1255,7 @@ def generar_password_provisorio(usuario: str) -> tuple[str, str] | None:
 def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> bool:
     smtp_address = "mail.arkhon.com.ar"
     smtp_port = 587
-    sender_email = "no-reply@katrix.com.ar"
+    sender_email = "supit@katrix.com.ar"
     sender_name = "No responder - Katrix"
     smtp_username = "supit@katrix.com.ar"
     smtp_password = "Nachax5$"
@@ -1700,7 +1288,7 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        server = smtplib.SMTP(smtp_address, smtp_port, timeout=30)
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=3)
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
@@ -1716,7 +1304,7 @@ def enviar_mail_recuperacion(destinatario: str, password_provisorio: str) -> boo
 def enviar_mail_recuperacion_link(destinatario: str, url_recuperacion: str) -> bool:
     smtp_address = "mail.arkhon.com.ar"
     smtp_port = 587
-    sender_email = "no-reply@katrix.com.ar"
+    sender_email = "supit@katrix.com.ar"
     sender_name = "No responder - Katrix"
     smtp_username = "supit@katrix.com.ar"
     smtp_password = "Nachax5$"
@@ -1773,27 +1361,25 @@ def enviar_mail_recuperacion_link(destinatario: str, url_recuperacion: str) -> b
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        server = smtplib.SMTP(smtp_address, smtp_port, timeout=30)
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=5)
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
         server.login(smtp_username, smtp_password)
-        server.sendmail(sender_email, destinatario, msg.as_string())
+        server.sendmail(sender_email, [destinatario], msg.as_string())
         server.quit()
         return True
     except Exception as e:
-        print(f"Error al enviar correo por SMTP: {e}")
+        print(f"Error al enviar correo de recuperación por SMTP: {e}")
         return False
-
-
 
 
 def enviar_mail_alerta_licencia(destinatario: str, cliente: str, email_cliente: str, clave: str, accion: str, motivo: str = None, dispositivo_id: str = None, dispositivos_info: str = None) -> bool:
     smtp_address = "mail.arkhon.com.ar"
     smtp_port = 587
-    sender_email = "no-reply@katrix.com.ar"
+    sender_email = "supit@katrix.com.ar"
     sender_name = "Alerta de Seguridad - Katrix"
-    smtp_username = "no-reply@katrix.com.ar"
+    smtp_username = "supit@katrix.com.ar"
     smtp_password = "Nachax5$"
     
     msg = MIMEMultipart()
@@ -1844,6 +1430,59 @@ def enviar_mail_alerta_licencia(destinatario: str, cliente: str, email_cliente: 
         return False
 
 
+def enviar_mail_ticket_soporte(nombre: str, email: str, telefono: str, mensaje: str, fingerprint: str = None) -> bool:
+    smtp_address = "mail.arkhon.com.ar"
+    smtp_port = 587
+    sender_email = "supit@katrix.com.ar"
+    sender_name = "Soporte Katrix CRM"
+    smtp_username = "supit@katrix.com.ar"
+    smtp_password = "Nachax5$"
+    destinatario = "supit@katrix.com.ar"
+
+    msg = MIMEMultipart()
+    msg['From'] = f'"{sender_name}" <{sender_email}>'
+    msg['To'] = destinatario
+    msg['Reply-To'] = email
+    msg['Subject'] = f"[Ticket Soporte Katrix] Consulta de {nombre}"
+
+    body = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333333;">
+        <h2 style="color: #1F3C88; border-bottom: 2px solid #1F3C88; padding-bottom: 8px;">Nuevo Ticket de Soporte Técnico</h2>
+        <p><strong>De:</strong> {nombre} (&lt;{email}&gt;)</p>
+        <p><strong>Teléfono / WhatsApp:</strong> {telefono or 'No especificado'}</p>
+        <p><strong>ID de Dispositivo (Hardware):</strong> {fingerprint or 'No disponible'}</p>
+        <hr style="border: none; border-top: 1px solid #EEEEEE; margin: 15px 0;" />
+        <p><strong>Mensaje / Consulta:</strong></p>
+        <div style="background-color: #F7FAFC; padding: 15px; border-left: 4px solid #1F3C88; border-radius: 4px; white-space: pre-wrap;">
+{mensaje}
+        </div>
+        <hr style="border: none; border-top: 1px solid #EEEEEE; margin: 20px 0;" />
+        <p style="font-size: 11px; color: #777777;">Enviado automáticamente desde el CRM de Productores Katrix.</p>
+      </body>
+    </html>
+    """
+    msg.attach(MIMEText(body, 'html', 'utf-8'))
+
+    try:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        server = smtplib.SMTP(smtp_address, smtp_port, timeout=5)
+        server.ehlo()
+        server.starttls(context=context)
+        server.ehlo()
+        server.login(smtp_username, smtp_password)
+        server.sendmail(sender_email, [destinatario], msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error al enviar ticket de soporte por SMTP: {e}")
+        return False
+
+
+
 def actualizar_estado_contacto(matricula: str, estado: str, usuario: str = "broker") -> bool:
     if not matricula or not estado:
         return False
@@ -1879,6 +1518,42 @@ def actualizar_observaciones(matricula: str, observaciones: str, usuario: str = 
         registrar_log(usuario, "OBSERVACIONES_CHANGED", f"Matrícula {matricula}: observaciones actualizadas.")
     return changed
 
+
+def get_en_organizacion(matricula: str) -> bool:
+    """Devuelve True si el productor tiene el flag en_organizacion activo."""
+    if not matricula:
+        return False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT en_organizacion FROM productores_detalle WHERE matricula = ?", (matricula,))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
+    except Exception:
+        return False
+
+
+def toggle_en_organizacion(matricula: str, valor: bool, usuario: str = "broker") -> bool:
+    """Activa o desactiva el flag en_organizacion para el productor."""
+    if not matricula:
+        return False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE productores_detalle SET en_organizacion = ? WHERE matricula = ?",
+            (1 if valor else 0, matricula)
+        )
+        changed = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        if changed:
+            accion = "EN_ORGANIZACION_ACTIVADO" if valor else "EN_ORGANIZACION_DESACTIVADO"
+            registrar_log(usuario, accion, f"Matrícula {matricula}")
+        return changed
+    except Exception:
+        return False
 
 def actualizar_companias(matricula: str, companias: str, usuario: str = "broker") -> bool:
     if not matricula:
@@ -2140,6 +1815,22 @@ def buscar_en_ssn(documento: str, tipo_doc: str = "DNI", token: str = "") -> str
             
             "g-recaptcha-response": token,
         }
+    elif tipo_doc.upper() == "NOMBRE":
+        data = {
+            "socpro": "PAS",
+            "tipoPas": "docNro",
+            "docNro": "",
+            "matricula": "",
+            "apellidorazonsocial": documento,
+            "Submit": "Buscar",
+            
+            "tipoBusqueda": "P",
+            "tipoDoc": "",
+            "nroDoc": "",
+            "btnBuscar": "BUSCAR",
+            
+            "g-recaptcha-response": token,
+        }
     else:
         data = {
             "socpro": "PAS",
@@ -2172,6 +1863,13 @@ def parsear_resultado(html: str) -> dict | None:
     if "no se encontraron" in html_lower or "sin resultado" in html_lower or "ingrese matrícula o apellido" in html_lower:
         print("  Búsqueda finalizada sin resultados o con error en el formulario.")
         return None
+
+    # El servidor de la SSN a veces devuelve el formulario HTML concatenado con el resultado HTML.
+    # Para evitar que el extractor posicional encuentre los labels en el formulario (ej. <option value="matricula">Matrícula</option>),
+    # nos quedamos solo con la última etiqueta <body>, que contiene los resultados reales.
+    if html_lower.count("<body") > 1:
+        last_body_idx = html_lower.rfind("<body")
+        html = html[last_body_idx:]
 
     import html as html_mod
     clean_text = html_mod.unescape(html)
@@ -2605,7 +2303,7 @@ def obtener_usuarios() -> list[dict]:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT u.id, u.usuario, u.email, u.requiere_cambio, u.intentos_fallidos, u.bloqueado_hasta, u.rol, u.username_changed,
+        SELECT u.id, u.usuario, u.email, u.requiere_cambio, u.intentos_fallidos, u.bloqueado_hasta, u.rol, u.username_changed, u.permisos, u.calendar_url,
                GROUP_CONCAT(p.matricula, ', ') AS matricula_asociada
         FROM usuarios u
         LEFT JOIN productores_detalle p ON p.usuario_id = u.id
@@ -2616,7 +2314,7 @@ def obtener_usuarios() -> list[dict]:
     conn.close()
     return [dict(r) for r in rows]
 
-def crear_usuario(usuario: str, email: str, password_txt: str, rol: str = "agente", requiere_cambio: int = 1, matricula: str = None) -> tuple[bool, str]:
+def crear_usuario(usuario: str, email: str, password_txt: str, rol: str = "agente", requiere_cambio: int = 1, matricula: str = None, permisos: str = "comercial,buscador,cartera") -> tuple[bool, str]:
     """Crea un nuevo usuario en el sistema con opciones completas y validación de matrícula."""
     try:
         usuario = usuario.strip().lower()
@@ -2655,8 +2353,8 @@ def crear_usuario(usuario: str, email: str, password_txt: str, rol: str = "agent
         # Insertar usuario
         hashed_pw = hash_password(password_txt)
         cursor.execute(
-            "INSERT INTO usuarios (usuario, email, password, requiere_cambio, rol, username_changed) VALUES (?, ?, ?, ?, ?, 0)",
-            (usuario, email, hashed_pw, requiere_cambio, rol)
+            "INSERT INTO usuarios (usuario, email, password, requiere_cambio, rol, username_changed, permisos) VALUES (?, ?, ?, ?, ?, 0, ?)",
+            (usuario, email, hashed_pw, requiere_cambio, rol, permisos)
         )
         new_user_id = cursor.lastrowid
         
@@ -2671,7 +2369,7 @@ def crear_usuario(usuario: str, email: str, password_txt: str, rol: str = "agent
         print(f"Error al crear usuario: {e}")
         return False, f"Error al crear usuario: {str(e)}"
 
-def actualizar_usuario(id_usuario: int, nuevo_usuario: str, nuevo_email: str, password_txt: str = None, rol: str = None, requiere_cambio: int = None, reset_lock: bool = False, is_self_update: bool = False, matricula: str = None) -> tuple[bool, str]:
+def actualizar_usuario(id_usuario: int, nuevo_usuario: str, nuevo_email: str, password_txt: str = None, rol: str = None, requiere_cambio: int = None, reset_lock: bool = False, is_self_update: bool = False, matricula: str = None, permisos: str = None, calendar_url: str = None) -> tuple[bool, str]:
     """Actualiza los datos de un usuario con opción de asociar/desasociar matrícula."""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -2765,6 +2463,14 @@ def actualizar_usuario(id_usuario: int, nuevo_usuario: str, nuevo_email: str, pa
         if reset_lock:
             sql += ", intentos_fallidos = 0, bloqueado_hasta = 0"
             
+        if permisos is not None:
+            sql += ", permisos = ?"
+            params.append(permisos)
+            
+        if calendar_url is not None:
+            sql += ", calendar_url = ?"
+            params.append(calendar_url)
+            
         sql += " WHERE id = ?"
         params.append(id_usuario)
         
@@ -2774,6 +2480,22 @@ def actualizar_usuario(id_usuario: int, nuevo_usuario: str, nuevo_email: str, pa
         return True, "Usuario actualizado correctamente"
     except Exception as e:
         return False, f"Error al actualizar el usuario: {str(e)}"
+
+def obtener_detalles_usuario(user_id: int) -> dict | None:
+    """Devuelve los detalles de un usuario dado su ID, incluyendo rol, permisos y calendar_url."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, usuario, email, rol, permisos, calendar_url FROM usuarios WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return dict(row)
+        return None
+    except Exception as e:
+        print(f"Error al obtener detalles de usuario: {e}")
+        return None
 
 def eliminar_usuario(id_usuario: int) -> bool:
     """Elimina un usuario por su ID y desvincula cualquier matrícula asociada."""
@@ -3542,7 +3264,7 @@ def guardar_licencia(clave: str, cliente: str, email_cliente: str,
     conn.close()
     return row_id
 
-def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None, motivo: Optional[str] = None, dispositivos_info: Optional[str] = None) -> bool:
+def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, estado: str, limite_dispositivos: int, dispositivo_id: Optional[str] = None, motivo: Optional[str] = None, dispositivos_info: Optional[str] = None, integraciones: Optional[str] = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
@@ -3551,6 +3273,10 @@ def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, e
         pass
     try:
         cursor.execute("ALTER TABLE licencias ADD COLUMN dispositivos_info TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE licencias ADD COLUMN integraciones TEXT")
     except sqlite3.OperationalError:
         pass
         
@@ -3564,6 +3290,10 @@ def actualizar_licencia(licencia_id: int, cliente: str, fecha_expiracion: str, e
     if dispositivos_info is not None:
         query += ", dispositivos_info=?"
         params.append(dispositivos_info)
+        
+    if integraciones is not None:
+        query += ", integraciones=?"
+        params.append(integraciones)
         
     query += " WHERE id=?"
     params.append(licencia_id)
@@ -3712,172 +3442,6 @@ def validar_licencia(clave: str, dispositivo_id: str, email_cliente: str = "", d
         "producto_nombre": PRODUCT_CODES.get(lic.get("producto", "CRM"), "Katrix Software"),
         "limite_dispositivos": lic.get("limite_dispositivos", 1)
     }
-
-
-def obtener_panel_username() -> str:
-    return "kadmin"
-
-
-def actualizar_panel_username(nuevo_user: str):
-    pass
-
-
-def obtener_panel_password_hash() -> str:
-    user = obtener_panel_user("kadmin")
-    kadmin_pass = os.environ.get("KATRIX_KADMIN_PASSWORD", "Katrix2026$")
-    return user["password_hash"] if user else hash_password(kadmin_pass)
-
-
-def actualizar_panel_password(nueva_pass: str):
-    actualizar_panel_user("kadmin", nueva_pass, "superadmin", '{"ver_licencias":true,"crear_licencia":true,"editar_licencia":true,"suspender_licencia":true,"eliminar_licencia":true,"ver_dispositivos":true,"desvincular_dispositivo":true}')
-
-
-# --- CRUD panel_users ---
-def obtener_panel_user(username: str) -> Optional[dict]:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT username, password_hash, role, permissions FROM panel_users WHERE username = ?", (username.strip(),))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
-    except Exception as e:
-        print(f"Error obtener_panel_user: {e}")
-        return None
-
-
-def crear_panel_user(username: str, password_txt: str, role: str, permissions: str) -> bool:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        hashed = hash_password(password_txt)
-        cursor.execute("""
-            INSERT INTO panel_users (username, password_hash, role, permissions)
-            VALUES (?, ?, ?, ?)
-        """, (username.strip(), hashed, role, permissions))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"Error crear_panel_user: {e}")
-        return False
-
-
-def actualizar_panel_user(username: str, password_txt: Optional[str], role: str, permissions: str) -> bool:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        if password_txt and password_txt.strip():
-            hashed = hash_password(password_txt)
-            cursor.execute("""
-                UPDATE panel_users 
-                SET password_hash = ?, role = ?, permissions = ? 
-                WHERE username = ?
-            """, (hashed, role, permissions, username.strip()))
-        else:
-            cursor.execute("""
-                UPDATE panel_users 
-                SET role = ?, permissions = ? 
-                WHERE username = ?
-            """, (role, permissions, username.strip()))
-        ok = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return ok
-    except Exception as e:
-        print(f"Error actualizar_panel_user: {e}")
-        return False
-
-
-def eliminar_panel_user(username: str) -> bool:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM panel_users WHERE username = ?", (username.strip(),))
-        ok = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return ok
-    except Exception as e:
-        print(f"Error eliminar_panel_user: {e}")
-        return False
-
-
-def obtener_todos_panel_users() -> list:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT username, role, permissions FROM panel_users ORDER BY username ASC")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        print(f"Error obtener_todos_panel_users: {e}")
-        return []
-
-
-def guardar_panel_biometric(credential_id: str, public_key: str, dispositivo_nombre: str, username: str = "kadmin"):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # Asegurar columna username
-    try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute("""
-        INSERT OR REPLACE INTO panel_biometrics (credential_id, public_key, dispositivo_nombre, username)
-        VALUES (?, ?, ?, ?)
-    """, (credential_id, public_key, dispositivo_nombre, username))
-    conn.commit()
-    conn.close()
-
-
-def obtener_panel_biometric(credential_id: str) -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # Asegurar columna username
-    try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute("SELECT credential_id, public_key, dispositivo_nombre, username FROM panel_biometrics WHERE credential_id = ?", (credential_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {
-            "credential_id": row[0],
-            "public_key": row[1],
-            "dispositivo_nombre": row[2],
-            "username": row[3] or "kadmin"
-        }
-    return None
-
-
-def obtener_todos_panel_biometrics() -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # Asegurar columna username
-    try:
-        cursor.execute("ALTER TABLE panel_biometrics ADD COLUMN IF NOT EXISTS username TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute("SELECT credential_id, dispositivo_nombre, creado_en, username FROM panel_biometrics ORDER BY creado_en DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "credential_id": r[0],
-            "dispositivo_nombre": r[1],
-            "creado_en": r[2],
-            "username": r[3] or "kadmin"
-        }
-        for r in rows
-    ]
 
 
 # ─── MAIN ────────────────────────────────────────────────
