@@ -14,11 +14,330 @@ import sys
 import os
 import sqlite3
 from typing import Optional, List, Dict, Any
-# Optimize SQLite for minimal resource usage, WAL mode, memory temp store, cache size limiting.
+# ─── COMPATIBILIDAD DINÁMICA CON POSTGRESQL ───────────────────────────────────
+DATABASE_URL = os.environ.get("DATABASE_URL")
+psycopg2 = None
+if DATABASE_URL:
+    try:
+        import psycopg2
+    except ImportError:
+        pass
+
+class DictRow(dict):
+    def __init__(self, row, keys):
+        super().__init__(zip(keys, row))
+        self._row = row
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._row[key]
+        return super().__getitem__(key)
+
+
+def translate_group_concat(sql: str) -> str:
+    idx = 0
+    while True:
+        pos = sql.upper().find("GROUP_CONCAT", idx)
+        if pos == -1:
+            break
+        open_paren = sql.find("(", pos)
+        if open_paren == -1:
+            idx = pos + len("GROUP_CONCAT")
+            continue
+            
+        paren_count = 1
+        i = open_paren + 1
+        args_str = ""
+        while i < len(sql) and paren_count > 0:
+            char = sql[i]
+            if char == '(':
+                paren_count += 1
+            elif char == ')':
+                paren_count -= 1
+            if paren_count > 0:
+                args_str += char
+            i += 1
+            
+        if paren_count > 0:
+            idx = open_paren + 1
+            continue
+            
+        args = []
+        current_arg = ""
+        p_depth = 0
+        in_single_quote = False
+        in_double_quote = False
+        j = 0
+        while j < len(args_str):
+            c = args_str[j]
+            if c == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif c == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif not in_single_quote and not in_double_quote:
+                if c == '(':
+                    p_depth += 1
+                elif c == ')':
+                    p_depth -= 1
+                elif c == ',' and p_depth == 0:
+                    args.append(current_arg.strip())
+                    current_arg = ""
+                    j += 1
+                    continue
+            current_arg += c
+            j += 1
+        args.append(current_arg.strip())
+        
+        if len(args) == 1:
+            expr = args[0]
+            if expr.upper().startswith("DISTINCT "):
+                real_expr = expr[9:]
+                new_str = f"string_agg(DISTINCT ({real_expr})::text, ',')"
+            else:
+                new_str = f"string_agg(({expr})::text, ',')"
+        elif len(args) == 2:
+            expr, sep = args[0], args[1]
+            if expr.upper().startswith("DISTINCT "):
+                real_expr = expr[9:]
+                new_str = f"string_agg(DISTINCT ({real_expr})::text, {sep})"
+            else:
+                new_str = f"string_agg(({expr})::text, {sep})"
+        else:
+            idx = i
+            continue
+            
+        sql = sql[:pos] + new_str + sql[i:]
+        idx = pos + len(new_str)
+        
+    return sql
+
+
+class PostgresCursorWrapper:
+    def __init__(self, pg_cursor, connection):
+        self._cursor = pg_cursor
+        self.connection = connection
+        self.lastrowid = None
+        self._row_factory = None
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+    def _ensure_connection(self):
+        if self.connection._conn.closed != 0:
+            self.connection.reconnect()
+            self._cursor = self.connection._conn.cursor()
+
+    def execute(self, sql, params=None):
+        if sql.strip().upper().startswith("PRAGMA"):
+            return self
+
+        try:
+            self._ensure_connection()
+        except Exception:
+            pass
+
+        # Traducir GROUP_CONCAT a string_agg para PostgreSQL
+        sql = translate_group_concat(sql)
+
+        # Traducir ? a %s
+        translated_sql = sql.replace('?', '%s')
+
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*,\s*['\"]localtime['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r"(?i)\bdatetime\s*\(\s*['\"]now['\"]\s*\)", 
+            'CURRENT_TIMESTAMP', 
+            translated_sql
+        )
+
+        translated_sql = re.sub(
+            r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 
+            'SERIAL PRIMARY KEY', 
+            translated_sql
+        )
+        translated_sql = re.sub(
+            r'(?i)\bDATETIME\b', 
+            'TIMESTAMP', 
+            translated_sql
+        )
+
+        if "INSERT OR IGNORE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "SOCIEDADES" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
+            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
+            elif "LICENCIAS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO NOTHING"
+            elif "USUARIOS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (email) DO NOTHING"
+        elif "INSERT OR REPLACE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "PRODUCTORES_DETALLE" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
+            elif "PANEL_SETTINGS" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
+
+        is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
+        has_returning = "RETURNING" in translated_sql.upper()
+
+        skip_returning = any(t in translated_sql.upper() for t in ["PANEL_SETTINGS", "PANEL_USERS", "PANEL_BIOMETRICS", "PRODUCTOR_SOCIEDAD", "PERMISOS_VISIBILIDAD", "LICENCIAS", "LOGS_AUDITORIA"])
+
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            try:
+                if is_insert and not has_returning and not skip_returning:
+                    try:
+                        modified_sql = translated_sql + " RETURNING id"
+                        self._cursor.execute(modified_sql, params or ())
+                        res = self._cursor.fetchone()
+                        if res:
+                            self.lastrowid = res[0]
+                    except Exception:
+                        self.connection._conn.rollback()
+                        self._cursor.execute(translated_sql, params or ())
+                        self.lastrowid = None
+                else:
+                    self._cursor.execute(translated_sql, params or ())
+                break
+            except Exception as e:
+                err_str = str(e)
+                if ("closed" in err_str.lower() or "terminated" in err_str.lower() or "connection" in err_str.lower()) and attempts == 1:
+                    try:
+                        self.connection.reconnect()
+                        self._cursor = self.connection._conn.cursor()
+                        continue
+                    except Exception:
+                        pass
+                if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
+                    raise sqlite3.OperationalError(err_str)
+                raise sqlite3.DatabaseError(err_str)
+
+        return self
+
+    def executemany(self, sql, seq_of_parameters):
+        if sql.strip().upper().startswith("PRAGMA"):
+            return self
+        sql = translate_group_concat(sql)
+        translated_sql = sql.replace('?', '%s')
+        translated_sql = re.sub(r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b', 'SERIAL PRIMARY KEY', translated_sql)
+        translated_sql = re.sub(r'(?i)\bDATETIME\b', 'TIMESTAMP', translated_sql)
+
+        if "INSERT OR IGNORE INTO" in translated_sql.upper():
+            translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', translated_sql)
+            if "SOCIEDADES" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (matricula) DO NOTHING"
+            elif "PRODUCTOR_SOCIEDAD" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (productor_matricula, sociedad_matricula) DO NOTHING"
+
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            try:
+                self._cursor.executemany(translated_sql, seq_of_parameters)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if ("closed" in err_str.lower() or "terminated" in err_str.lower() or "connection" in err_str.lower()) and attempts == 1:
+                    try:
+                        self.connection.reconnect()
+                        self._cursor = self.connection._conn.cursor()
+                        continue
+                    except Exception:
+                        pass
+                if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
+                    raise sqlite3.OperationalError(err_str)
+                raise sqlite3.DatabaseError(err_str)
+
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        keys = [desc[0] for desc in self._cursor.description]
+        if self._row_factory or getattr(self.connection, 'row_factory', None):
+            return DictRow(row, keys)
+        return row
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        if not rows:
+            return []
+        keys = [desc[0] for desc in self._cursor.description]
+        if self._row_factory or getattr(self.connection, 'row_factory', None):
+            return [DictRow(row, keys) for row in rows]
+        return rows
+
+    def close(self):
+        try:
+            self._cursor.close()
+        except Exception:
+            pass
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+class PostgresConnectionWrapper:
+    def __init__(self, pg_conn, dsn=None):
+        self._conn = pg_conn
+        self.dsn = dsn or DATABASE_URL
+        self.row_factory = None
+
+    def reconnect(self):
+        try:
+            if psycopg2 and self.dsn:
+                self._conn = psycopg2.connect(self.dsn)
+        except Exception as e:
+            print(f"Error al reconectar PostgreSQL: {e}")
+
+    def cursor(self):
+        if self._conn.closed != 0:
+            self.reconnect()
+        cursor = self._conn.cursor()
+        return PostgresCursorWrapper(cursor, self)
+
+    def commit(self):
+        if self._conn.closed == 0:
+            self._conn.commit()
+
+    def rollback(self):
+        if self._conn.closed == 0:
+            self._conn.rollback()
+
+    def close(self):
+        try:
+            if self._conn.closed == 0:
+                self._conn.close()
+        except Exception:
+            pass
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+
 _wal_initialized = False
 _orig_sqlite_connect = sqlite3.connect
 def _custom_sqlite_connect(*args, **kwargs):
     global _wal_initialized
+    if DATABASE_URL and psycopg2:
+        try:
+            pg_conn = psycopg2.connect(DATABASE_URL)
+            return PostgresConnectionWrapper(pg_conn)
+        except Exception as e:
+            print(f"Error conectando a Postgres (DATABASE_URL), cayendo a SQLite: {e}")
+
     if "timeout" not in kwargs:
         kwargs["timeout"] = 30.0
     conn = _orig_sqlite_connect(*args, **kwargs)
@@ -26,16 +345,14 @@ def _custom_sqlite_connect(*args, **kwargs):
         if not _wal_initialized:
             conn.execute("PRAGMA journal_mode = WAL;")
             _wal_initialized = True
-        # NORMAL synchronous mode is faster and safe in WAL mode
         conn.execute("PRAGMA synchronous = NORMAL;")
-        # Store temp tables in memory to avoid disk access
         conn.execute("PRAGMA temp_store = MEMORY;")
-        # Limit memory cache to ~2MB to keep RAM footprint low when compiled to .exe
         conn.execute("PRAGMA cache_size = -2000;")
     except Exception:
         pass
     return conn
 sqlite3.connect = _custom_sqlite_connect
+
 import csv
 import secrets
 import string
