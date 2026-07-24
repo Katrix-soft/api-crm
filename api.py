@@ -1461,13 +1461,27 @@ def api_soporte_ticket(request: Request, body: SoporteTicketRequest):
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.get("/", include_in_schema=False)
-@app.get("/panel", include_in_schema=False)
-def redirect_to_docs():
-    """Redirige automáticamente la raíz y /panel a la documentación Swagger de la API."""
+def redirect_root():
+    """Redirige la raíz a la documentación Swagger de la API."""
     return RedirectResponse(url="/docs")
+
+@app.get("/panel.html", response_class=FileResponse, include_in_schema=False)
+@app.get("/panel", response_class=FileResponse, include_in_schema=False)
+def serve_panel():
+    """Sirve el Panel Web HTML de gestión de licencias."""
+    p_path = os.path.join(BASE_DIR, "panel.html")
+    if os.path.exists(p_path):
+        return FileResponse(p_path, media_type="text/html")
+    raise HTTPException(status_code=404, detail="panel.html no encontrado")
+
+app.mount("/panel", StaticFiles(directory=BASE_DIR, html=True), name="panel_static")
+
 
 
 @app.get("/check-update", tags=["Sistema"])
