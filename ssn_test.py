@@ -173,17 +173,23 @@ class PostgresCursorWrapper:
                 translated_sql += " ON CONFLICT (clave) DO NOTHING"
             elif "USUARIOS" in translated_sql.upper():
                 translated_sql += " ON CONFLICT (email) DO NOTHING"
+            elif "CONFIGURACION_SISTEMA" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO NOTHING"
+            elif "DO NOTHING" not in translated_sql.upper():
+                translated_sql += " ON CONFLICT DO NOTHING"
         elif "INSERT OR REPLACE INTO" in translated_sql.upper():
             translated_sql = re.sub(r'(?i)\bINSERT\s+OR\s+REPLACE\s+INTO\b', 'INSERT INTO', translated_sql)
             if "PRODUCTORES_DETALLE" in translated_sql.upper():
                 translated_sql += " ON CONFLICT (matricula) DO UPDATE SET nombre=EXCLUDED.nombre, documento=EXCLUDED.documento, cuit=EXCLUDED.cuit, ramo=EXCLUDED.ramo, provincia=EXCLUDED.provincia, telefono=EXCLUDED.telefono, email=EXCLUDED.email, resolucion=EXCLUDED.resolucion, fecha_resolucion=EXCLUDED.fecha_resolucion, domicilio=EXCLUDED.domicilio, localidad=EXCLUDED.localidad, cod_postal=EXCLUDED.cod_postal, estado_contacto=EXCLUDED.estado_contacto, observaciones=EXCLUDED.observaciones, usuario_id=EXCLUDED.usuario_id, scraped_at=CURRENT_TIMESTAMP"
             elif "PANEL_SETTINGS" in translated_sql.upper():
                 translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
+            elif "CONFIGURACION_SISTEMA" in translated_sql.upper():
+                translated_sql += " ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor"
 
         is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
         has_returning = "RETURNING" in translated_sql.upper()
 
-        skip_returning = any(t in translated_sql.upper() for t in ["PANEL_SETTINGS", "PANEL_USERS", "PANEL_BIOMETRICS", "PRODUCTOR_SOCIEDAD", "PERMISOS_VISIBILIDAD", "LICENCIAS", "LOGS_AUDITORIA"])
+        skip_returning = any(t in translated_sql.upper() for t in ["PANEL_SETTINGS", "PANEL_USERS", "PANEL_BIOMETRICS", "PRODUCTOR_SOCIEDAD", "PERMISOS_VISIBILIDAD", "LICENCIAS", "LOGS_AUDITORIA", "CONFIGURACION_SISTEMA", "SOCIEDADES", "PRODUCTORES_DETALLE"]) or "DO NOTHING" in translated_sql.upper()
 
         attempts = 0
         while attempts < 2:
@@ -197,7 +203,8 @@ class PostgresCursorWrapper:
                         if res:
                             self.lastrowid = res[0]
                     except Exception:
-                        self.connection._conn.rollback()
+                        if not getattr(self.connection._conn, "autocommit", False):
+                            self.connection._conn.rollback()
                         self._cursor.execute(translated_sql, params or ())
                         self.lastrowid = None
                 else:
