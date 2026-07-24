@@ -212,6 +212,12 @@ class PostgresCursorWrapper:
                         continue
                     except Exception:
                         pass
+                try:
+                    if not getattr(self.connection._conn, "autocommit", False):
+                        self.connection._conn.rollback()
+                except Exception:
+                    pass
+
                 if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
                     raise sqlite3.OperationalError(err_str)
                 raise sqlite3.DatabaseError(err_str)
@@ -248,6 +254,13 @@ class PostgresCursorWrapper:
                         continue
                     except Exception:
                         pass
+
+                try:
+                    if not getattr(self.connection._conn, "autocommit", False):
+                        self.connection._conn.rollback()
+                except Exception:
+                    pass
+
                 if "already exists" in err_str.lower() or "duplicate" in err_str.lower():
                     raise sqlite3.OperationalError(err_str)
                 raise sqlite3.DatabaseError(err_str)
@@ -292,27 +305,41 @@ class PostgresConnectionWrapper:
         self._conn = pg_conn
         self.dsn = dsn or DATABASE_URL
         self.row_factory = None
+        try:
+            self._conn.autocommit = True
+        except Exception:
+            pass
 
     def reconnect(self):
         try:
             if psycopg2 and self.dsn:
                 self._conn = psycopg2.connect(self.dsn)
+                self._conn.autocommit = True
         except Exception as e:
             print(f"Error al reconectar PostgreSQL: {e}")
 
     def cursor(self):
-        if self._conn.closed != 0:
+        try:
+            if self._conn.closed != 0:
+                self.reconnect()
+        except Exception:
             self.reconnect()
         cursor = self._conn.cursor()
         return PostgresCursorWrapper(cursor, self)
 
     def commit(self):
-        if self._conn.closed == 0:
-            self._conn.commit()
+        try:
+            if self._conn.closed == 0 and not getattr(self._conn, "autocommit", False):
+                self._conn.commit()
+        except Exception:
+            pass
 
     def rollback(self):
-        if self._conn.closed == 0:
-            self._conn.rollback()
+        try:
+            if self._conn.closed == 0 and not getattr(self._conn, "autocommit", False):
+                self._conn.rollback()
+        except Exception:
+            pass
 
     def close(self):
         try:
@@ -334,9 +361,11 @@ def _custom_sqlite_connect(*args, **kwargs):
     if DATABASE_URL and psycopg2:
         try:
             pg_conn = psycopg2.connect(DATABASE_URL)
+            pg_conn.autocommit = True
             return PostgresConnectionWrapper(pg_conn)
         except Exception as e:
             print(f"Error conectando a Postgres (DATABASE_URL), cayendo a SQLite: {e}")
+
 
     if "timeout" not in kwargs:
         kwargs["timeout"] = 30.0
